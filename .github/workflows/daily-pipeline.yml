@@ -22,21 +22,22 @@ jobs:
         run: |
           pip install google-cloud-bigquery pandas requests dbt-bigquery
       
-      - name: Extract OpenWeather data
+      # ✅ CORRECTION 1 : ERA5 (pas OpenWeather)
+      - name: Extract ERA5 Seamless data
         env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           GCP_PROJECT_ID: newfourcasters
         run: |
-          python scripts/extract_openweather.py
+          python scripts/extract_era5.py
       
+      # ✅ CORRECTION 2 : Chemin dbt correct
       - name: Run dbt models
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
           echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
-          cd lesfourcasters_dbt
           dbt run --profiles-dir ~/.dbt
       
+      # ✅ OPTIONNEL : Slack notification
       - name: Notify Slack on failure
         if: failure()
         uses: slackapi/slack-github-action@v1.24.0
