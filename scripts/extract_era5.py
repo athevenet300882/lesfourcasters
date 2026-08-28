@@ -110,13 +110,15 @@ def fetch_batch(batch, start_date, end_date):
             payload = resp.json()
             return payload if isinstance(payload, list) else [payload]
         except Exception as e:
-            print(f"  tentative {attempt}/{MAX_RETRIES} echouee: {e}", flush=True)
+            message = str(e)[:120]
+            print(f"  tentative {attempt}/{MAX_RETRIES} echouee: {message}", flush=True)
             if attempt < MAX_RETRIES:
-                time.sleep(5 * attempt)
+                time.sleep(30 * attempt)
     return []
 
 
 def collect(client, start_date, end_date):
+    """Retourne (lignes_nouvelles, nombre_de_lots_perdus)."""
     communes = get_communes_from_bigquery(client)
     print(f"{len(communes)} communes", flush=True)
 
@@ -125,12 +127,20 @@ def collect(client, start_date, end_date):
 
     now = datetime.now().isoformat()
     new_rows = []
+    lots_perdus = 0
+    nb_lots = (len(communes) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for i in range(0, len(communes), BATCH_SIZE):
         batch = communes[i:i + BATCH_SIZE]
-        print(f"Lot {i // BATCH_SIZE + 1} ({len(batch)} communes)", flush=True)
+        print(f"Lot {i // BATCH_SIZE + 1}/{nb_lots} ({len(batch)} communes)", flush=True)
 
         results = fetch_batch(batch, start_date, end_date)
+
+        if not results:
+            lots_perdus += 1
+            print(f"  LOT PERDU apres {MAX_RETRIES} tentatives", flush=True)
+            time.sleep(PAUSE_SECONDS)
+            continue
 
         for commune, data in zip(batch, results):
             daily = data.get('daily')
@@ -161,7 +171,7 @@ def collect(client, start_date, end_date):
 
         time.sleep(PAUSE_SECONDS)
 
-    return new_rows
+    return new_rows, lots_perdus
 
 
 def load_to_bigquery(client, rows):
@@ -186,13 +196,17 @@ def main():
     print(f"Collecte ERA5 du {start_date} au {end_date}", flush=True)
 
     client = bigquery.Client(project=GCP_PROJECT)
-    rows = collect(client, start_date, end_date)
+    rows, lots_perdus = collect(client, start_date, end_date)
 
-    if not rows:
+    if rows:
+        load_to_bigquery(client, rows)
+    else:
         print("Aucune nouvelle ligne a inserer", flush=True)
-        return
 
-    load_to_bigquery(client, rows)
+    if lots_perdus:
+        raise SystemExit(
+            f"ECHEC : {lots_perdus} lot(s) non collecte(s) apres {MAX_RETRIES} tentatives"
+        )
 
 
 if __name__ == '__main__':
