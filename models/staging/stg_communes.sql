@@ -4,7 +4,7 @@
 ) }}
 
 SELECT
-  Commune,
+  TRIM(Commune) AS Commune,
   Departement,
   `Région` AS region,
   LPAD(CAST(Numero_Departement AS STRING), 2, '0') AS numero_departement,

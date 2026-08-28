@@ -55,7 +55,8 @@ communes AS (
 
 joined AS (
   SELECT
-    w.*,
+    w.* EXCEPT(ville),
+    COALESCE(c2.Commune, w.ville) AS ville,
     COALESCE(c2.Departement, c1.Departement) AS departement,
     COALESCE(c2.region, c1.region) AS region,
     c2.code_insee AS code_insee,

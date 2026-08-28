@@ -34,7 +34,7 @@ SELECT
   soil_moisture_7_to_28cm_mean AS humidite_sol_7_28cm,
   soil_moisture_28_to_100cm_mean AS humidite_sol_28_100cm,
   soil_temperature_0_to_7cm_mean AS temperature_sol_0_7cm,
-  IFNULL(Ville, nom_poi) AS ville,
+  TRIM(IFNULL(Ville, nom_poi)) AS ville,
   LPAD(numero_departement, 2, '0') AS numero_departement,
   latitude_poi AS latitude,
   longitude_poi AS longitude,
