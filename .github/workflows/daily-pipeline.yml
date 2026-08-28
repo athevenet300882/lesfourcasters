@@ -28,9 +28,25 @@ jobs:
         run: |
           python scripts/extract_era5.py
       
-      - name: Run dbt models
+      - name: Setup dbt profiles
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
           echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          lesfourcasters_dbt:
+            target: dev
+            outputs:
+              dev:
+                method: service-account-json
+                project: newfourcasters
+                keyfile: /tmp/gcp-key.json
+                dataset: lesfourcasters_dbt
+                location: US
+                threads: 4
+          EOF
+      
+      - name: Run dbt models
+        run: |
           dbt run
