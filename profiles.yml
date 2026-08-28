@@ -3,6 +3,13 @@ lesfourcasters_dbt:
   outputs:
     dev:
       type: bigquery
+      method: oauth
+      project: newfourcasters
+      dataset: lesfourcasters_dbt
+      location: US
+      threads: 4
+    ci:
+      type: bigquery
       method: service-account
       project: newfourcasters
       keyfile: /tmp/gcp-key.json

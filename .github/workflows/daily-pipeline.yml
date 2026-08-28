@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install google-cloud-bigquery pandas requests dbt-bigquery
@@ -27,8 +27,7 @@ jobs:
       - name: Extract ERA5 Seamless data
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
-          GCP_PROJECT_ID: newfourcasters
         run: python scripts/extract_era5.py
 
       - name: Run dbt models
-        run: dbt run --profiles-dir .
+        run: dbt run --profiles-dir . --target ci
