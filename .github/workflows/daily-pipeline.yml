@@ -8,48 +8,27 @@ on:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      
+
       - name: Install dependencies
-        run: |
-          pip install google-cloud-bigquery pandas requests dbt-bigquery
-      
+        run: pip install google-cloud-bigquery pandas requests dbt-bigquery
+
       - name: Setup GCP credentials
-        run: |
-          echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
-      
+        run: echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+
       - name: Extract ERA5 Seamless data
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
           GCP_PROJECT_ID: newfourcasters
-        run: |
-          python scripts/extract_era5.py
-      
-      - name: Setup dbt profiles
-        run: |
-          mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << 'EOF'
-          lesfourcasters_dbt:
-            target: dev
-            outputs:
-              dev:
-                type: bigquery
-                method: service-account
-                project: newfourcasters
-                keyfile: /tmp/gcp-key.json
-                dataset: lesfourcasters_dbt
-                location: US
-                threads: 4
-          EOF
-      
+        run: python scripts/extract_era5.py
+
       - name: Run dbt models
-        run: |
-          dbt run
+        run: dbt run --profiles-dir .
