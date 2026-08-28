@@ -1,104 +1,133 @@
-import os
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.cloud import bigquery
 import hashlib
-import json
 import io
 
-# Config
-OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
-GCP_PROJECT = os.getenv('GCP_PROJECT_ID', 'newfourcasters')
+GCP_PROJECT = 'newfourcasters'
+TABLE_ID = f"{GCP_PROJECT}.lesfourcasters_raw.raw_open_meteo"
 
-# Liste des communes (exemple simplifié)
-COMMUNES = [
-    {'name': 'Paris', 'lat': 48.8566, 'lon': 2.3522, 'dept': '75'},
-    {'name': 'Marseille', 'lat': 43.2965, 'lon': 5.3698, 'dept': '13'},
-    {'name': 'Lyon', 'lat': 45.7640, 'lon': 4.8357, 'dept': '69'},
-    {'name': 'Toulouse', 'lat': 43.6047, 'lon': 1.4442, 'dept': '31'},
-    {'name': 'Nice', 'lat': 43.7102, 'lon': 7.2620, 'dept': '06'},
-]
+# ERA5 a un délai de ~5 jours : on va chercher une fenêtre glissante
+LAG_DAYS = 5
+WINDOW_DAYS = 10
 
-def get_weather(lat, lon, city, dept):
-    """Collecte données OpenWeather"""
-    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        return {
-            'date': datetime.now().date().isoformat(),
-            'time': datetime.now().time().isoformat(),
-            'nom_poi': city,
-            'numero_departement': dept,
-            'latitude_poi': lat,
-            'longitude_poi': lon,
-            'temperature_2m_mean': data.get('main', {}).get('temp'),
-            'temperature_2m_min': data.get('main', {}).get('temp_min'),
-            'temperature_2m_max': data.get('main', {}).get('temp_max'),
-            'relative_humidity_2m_mean': data.get('main', {}).get('humidity'),
-            'weather_code': data.get('weather', [{}])[0].get('id'),
-            'loaded_at': datetime.now().isoformat(),
-        }
-    except Exception as e:
-        print(f"❌ Erreur {city}: {e}")
-        return None
 
 def compute_hash(row):
-    """Crée hash SHA256 pour déduplication"""
-    key_str = f"{row['date']}_{row['nom_poi']}_{row['latitude_poi']}_{row['longitude_poi']}"
-    return hashlib.sha256(key_str.encode()).hexdigest()
+    """Hash SHA256 de la cle metier : une commune n'a qu'une mesure par jour."""
+    key = f"{row['time']}_{row['nom_poi']}"
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def get_communes_from_bigquery(client):
+    query = """
+    SELECT DISTINCT Commune, Latitude, Longitude, Numero_Departement
+    FROM `newfourcasters.lesfourcasters_raw.raw_communes_referentiel`
+    WHERE Commune IS NOT NULL
+    ORDER BY Commune
+    """
+    results = client.query(query).to_dataframe()
+    return [
+        {
+            'name': row['Commune'],
+            'lat': row['Latitude'],
+            'lon': row['Longitude'],
+            'dept': str(row['Numero_Departement']).zfill(2),
+        }
+        for _, row in results.iterrows()
+    ]
+
+
+def get_existing_hashes(client, start_date, end_date):
+    """Hashs deja presents dans BigQuery sur la fenetre."""
+    query = f"""
+    SELECT DISTINCT
+      FORMAT_TIMESTAMP('%Y-%m-%d 00:00:00', time) AS time_str,
+      nom_poi
+    FROM `{TABLE_ID}`
+    WHERE DATE(time) BETWEEN '{start_date}' AND '{end_date}'
+    """
+    results = client.query(query).to_dataframe()
+    return {
+        compute_hash({'time': row['time_str'], 'nom_poi': row['nom_poi']})
+        for _, row in results.iterrows()
+    }
+
+
+def get_era5(lat, lon, city, dept, start_date, end_date):
+    url = (
+        "https://archive-api.open-meteo.com/v1/era5"
+        f"?latitude={lat}&longitude={lon}"
+        f"&start_date={start_date}&end_date={end_date}"
+        "&daily=temperature_2m_mean,temperature_2m_min,temperature_2m_max,"
+        "relative_humidity_2m_mean"
+        "&timezone=Europe/Paris"
+    )
+    try:
+        data = requests.get(url, timeout=15).json()
+        if 'daily' not in data:
+            return []
+
+        rows = []
+        for i, date_str in enumerate(data['daily']['time']):
+            if data['daily']['temperature_2m_mean'][i] is None:
+                continue
+            rows.append({
+                'time': f"{date_str} 00:00:00",
+                'nom_poi': city,
+                'numero_departement': dept,
+                'latitude_poi': lat,
+                'longitude_poi': lon,
+                'temperature_2m_mean': data['daily']['temperature_2m_mean'][i],
+                'temperature_2m_min': data['daily']['temperature_2m_min'][i],
+                'temperature_2m_max': data['daily']['temperature_2m_max'][i],
+                'relative_humidity_2m_mean': data['daily']['relative_humidity_2m_mean'][i],
+            })
+        return rows
+    except Exception as e:
+        print(f"Erreur {city}: {e}")
+        return []
+
 
 def main():
-    print("🌍 Collecte OpenWeather...")
-    
-    if not OPENWEATHER_API_KEY:
-        print("❌ OPENWEATHER_API_KEY manquante")
+    end_date = (datetime.now() - timedelta(days=LAG_DAYS)).date().isoformat()
+    start_date = (datetime.now() - timedelta(days=LAG_DAYS + WINDOW_DAYS)).date().isoformat()
+    print(f"Collecte ERA5 du {start_date} au {end_date}")
+
+    client = bigquery.Client(project=GCP_PROJECT)
+
+    communes = get_communes_from_bigquery(client)
+    print(f"{len(communes)} communes")
+
+    existing = get_existing_hashes(client, start_date, end_date)
+    print(f"{len(existing)} lignes deja presentes sur la fenetre")
+
+    new_rows = []
+    for idx, c in enumerate(communes):
+        for row in get_era5(c['lat'], c['lon'], c['name'], c['dept'], start_date, end_date):
+            if compute_hash(row) not in existing:
+                new_rows.append(row)
+        if (idx + 1) % 50 == 0:
+            print(f"{idx + 1}/{len(communes)} communes traitees")
+
+    if not new_rows:
+        print("Aucune nouvelle ligne a inserer")
         return
-    
-    # Collecter données
-    rows = []
-    for commune in COMMUNES:
-        row = get_weather(commune['lat'], commune['lon'], commune['name'], commune['dept'])
-        if row:
-            row['row_hash'] = compute_hash(row)
-            rows.append(row)
-            print(f"✅ {commune['name']}")
-    
-    if not rows:
-        print("❌ Aucune donnée collectée")
-        return
-    
-    df = pd.DataFrame(rows)
-    print(f"✅ {len(df)} communes collectées")
-    
-    # Upload BigQuery
-    try:
-        client = bigquery.Client(project=GCP_PROJECT)
-        table_id = f"{GCP_PROJECT}.lesfourcasters_raw.raw_open_meteo"
-        
-        job_config = bigquery.LoadJobConfig(
-            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-            write_disposition='WRITE_APPEND'
-        )
-        
-        # Convertir en JSON lines
-        json_data = df.to_json(orient='records', date_format='iso', lines=True)
-        
-        load_job = client.load_table_from_file(
-            io.StringIO(json_data),
-            table_id,
-            job_config=job_config
-        )
-        
-        load_job.result()
-        print(f"✅ {load_job.output_rows} lignes ajoutées à BigQuery")
-        
-    except Exception as e:
-        print(f"❌ Erreur BigQuery: {e}")
-        raise
+
+    df = pd.DataFrame(new_rows)
+    print(f"{len(df)} nouvelles lignes")
+
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        write_disposition='WRITE_APPEND',
+    )
+    json_data = df.to_json(orient='records', date_format='iso', lines=True)
+    load_job = client.load_table_from_file(
+        io.StringIO(json_data), TABLE_ID, job_config=job_config
+    )
+    load_job.result()
+    print(f"{load_job.output_rows} lignes ajoutees a BigQuery")
+
 
 if __name__ == '__main__':
     main()
