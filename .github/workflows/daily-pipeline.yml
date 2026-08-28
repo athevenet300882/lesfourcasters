@@ -22,24 +22,27 @@ jobs:
         run: |
           pip install google-cloud-bigquery pandas requests dbt-bigquery
       
+      - name: Setup GCP credentials
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+      
       - name: Extract ERA5 Seamless data
         env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
           GCP_PROJECT_ID: newfourcasters
         run: |
           python scripts/extract_era5.py
       
       - name: Setup dbt profiles
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
-          echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
           mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << EOF
+          cat > ~/.dbt/profiles.yml << 'EOF'
           lesfourcasters_dbt:
             target: dev
             outputs:
               dev:
-                method: service-account-json
+                type: bigquery
+                method: service-account
                 project: newfourcasters
                 keyfile: /tmp/gcp-key.json
                 dataset: lesfourcasters_dbt
