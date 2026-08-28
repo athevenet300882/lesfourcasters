@@ -1,3 +1,9 @@
-{{ config(materialized = 'table', tags = ['mart']) }}
+{{ config(
+    materialized = 'table',
+    tags = ['mart', 'reporting']
+) }}
 
-SELECT * FROM {{ ref('int_health_weather_join') }}
+SELECT
+  *,
+  CURRENT_TIMESTAMP() AS updated_at
+FROM {{ ref('int_health_weather_join') }}

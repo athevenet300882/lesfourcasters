@@ -3,16 +3,13 @@ version: 2
 models:
   - name: stg_open_meteo
     columns:
-      - name: time
+      - name: date
         tests:
           - not_null
-      - name: commune_name
+      - name: temperature_moyenne
         tests:
           - not_null
-
-  - name: stg_odisse_canicule
-    columns:
-      - name: annee
+      - name: ville
         tests:
           - not_null
 
@@ -22,3 +19,30 @@ models:
         tests:
           - not_null
           - unique
+      - name: code_insee
+        tests:
+          - not_null
+
+  - name: stg_odisse_canicule
+    columns:
+      - name: annee
+        tests:
+          - not_null
+
+  - name: fct_daily_heat_health
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: ville
+        tests:
+          - not_null
+      - name: code_insee
+        tests:
+          - not_null
+      - name: region
+        tests:
+          - not_null
+      - name: departement
+        tests:
+          - not_null
