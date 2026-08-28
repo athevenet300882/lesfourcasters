@@ -41,5 +41,4 @@ SELECT
   CURRENT_TIMESTAMP() AS inserted_at
 FROM {{ source('raw', 'raw_open_meteo') }}
 WHERE time IS NOT NULL
-  AND weather_code IS NOT NULL
   AND temperature_2m_mean IS NOT NULL
