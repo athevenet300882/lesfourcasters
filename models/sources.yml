@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: raw
+    database: newfourcasters
+    schema: lesfourcasters_raw
+    tables:
+      - name: raw_open_meteo
+        description: "Données météorologiques Open-Meteo"
+      
+      - name: raw_odisse_canicule
+        description: "Données sanitaires Odissé - canicule"
+      
+      - name: raw_communes_referentiel
+        description: "Référentiel des communes"
+      
+      - name: raw_odisse_epidemies_hivernales
+        description: "Données sanitaires Odissé - épidémies hivernales"

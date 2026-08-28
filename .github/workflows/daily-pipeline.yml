@@ -1,0 +1,48 @@
+name: Daily Pipeline - lesfourcasters
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 6h UTC chaque jour
+  workflow_dispatch:      # Trigger manuel
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install google-cloud-bigquery pandas requests dbt-bigquery
+      
+      - name: Extract OpenWeather data
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          GCP_PROJECT_ID: newfourcasters
+        run: |
+          python scripts/extract_openweather.py
+      
+      - name: Run dbt models
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+          cd lesfourcasters_dbt
+          dbt run --profiles-dir ~/.dbt
+      
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK }}
+          payload: |
+            {
+              "text": "❌ lesfourcasters pipeline FAILED"
+            }

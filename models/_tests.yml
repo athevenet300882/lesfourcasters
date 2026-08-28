@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: stg_open_meteo
+    columns:
+      - name: time
+        tests:
+          - not_null
+      - name: commune_name
+        tests:
+          - not_null
+
+  - name: stg_odisse_canicule
+    columns:
+      - name: annee
+        tests:
+          - not_null
+
+  - name: stg_communes
+    columns:
+      - name: Commune
+        tests:
+          - not_null
+          - unique
