@@ -1,4 +1,5 @@
 -- models/staging/stg_open_meteo.sql
+
 {{ config(
     materialized='view',
     schema='lesfourcasters_dbt',
@@ -19,7 +20,6 @@ SELECT
     latitude_poi as latitude,
     longitude_poi as longitude,
     ville,
-    department as departement,
     CURRENT_TIMESTAMP() as inserted_at
 FROM {{ source('raw', 'raw_open_meteo') }}
 WHERE time IS NOT NULL

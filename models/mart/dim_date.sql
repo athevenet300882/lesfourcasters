@@ -1,4 +1,5 @@
 -- models/mart/dim_date.sql
+
 {{ config(
     materialized='table',
     schema='lesfourcasters_dbt',

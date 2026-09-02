@@ -1,4 +1,5 @@
 -- models/mart/dim_commune.sql
+
 {{ config(
     materialized='table',
     schema='lesfourcasters_dbt',
@@ -9,7 +10,6 @@ WITH communes AS (
     SELECT DISTINCT
         nom_poi as code_insee,
         ville,
-        departement as departement,
         numero_departement,
         latitude_poi as latitude,
         longitude_poi as longitude,
@@ -21,7 +21,6 @@ WITH communes AS (
 SELECT
     code_insee,
     ville,
-    departement,
     numero_departement,
     latitude,
     longitude,

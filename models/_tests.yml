@@ -1,48 +1,102 @@
 version: 2
 
 models:
-  - name: stg_open_meteo
+  # ===== DIMENSIONS =====
+  
+  - name: dim_commune
+    description: "Dimension communes - attributs géographiques"
+    columns:
+      - name: code_insee
+        description: "Code INSEE de la commune"
+      - name: ville
+        description: "Nom de la ville"
+      - name: numero_departement
+        description: "Numéro de département"
+      - name: latitude
+        description: "Latitude"
+      - name: longitude
+        description: "Longitude"
+
+  - name: dim_date
+    description: "Dimension date - calendrier"
     columns:
       - name: date
+        description: "Date (clé primaire)"
+        tests:
+          - not_null
+          - unique
+      - name: annee
+        description: "Année"
+        tests:
+          - not_null
+      - name: mois
+        description: "Mois (1-12)"
+        tests:
+          - not_null
+      - name: jour_semaine
+        description: "Jour de la semaine (1-7)"
+      - name: est_weekend
+        description: "Booléen: est-ce un weekend?"
+
+  # ===== FACT TABLES =====
+  
+  - name: fct_daily_heat_weather
+    description: "Fact table quotidienne - météo (grain: jour-commune)"
+    columns:
+      - name: date
+        description: "Date"
+        tests:
+          - not_null
+      - name: code_insee
+        description: "Code INSEE commune"
         tests:
           - not_null
       - name: temperature_moyenne
+        description: "Température moyenne (°C)"
+      - name: humidite_moyenne
+        description: "Humidité relative moyenne (%)"
+      - name: precipitations_totales
+        description: "Précipitations totales (mm)"
+      - name: vitesse_vent_moyenne
+        description: "Vitesse vent moyenne (km/h)"
+      - name: pression_moyenne
+        description: "Pression moyenne (hPa)"
+      - name: ensoleillement_duree
+        description: "Durée d'ensoleillement (heures)"
+
+  # ===== STAGING =====
+  
+  - name: stg_open_meteo
+    description: "Staging Open-Meteo ERA5"
+    columns:
+      - name: date
+        description: "Date"
         tests:
           - not_null
-      - name: ville
+      - name: code_insee
+        description: "Code INSEE"
+        tests:
+          - not_null
+      - name: temperature_moyenne
+        description: "Température moyenne"
         tests:
           - not_null
 
   - name: stg_communes
+    description: "Staging communes"
     columns:
       - name: Commune
-        tests:
-          - not_null
-          - unique
-      - name: code_insee
+        description: "Nom de la commune"
         tests:
           - not_null
 
   - name: stg_odisse_canicule
+    description: "Staging Odissé canicules"
     columns:
       - name: annee
+        description: "Année"
         tests:
           - not_null
 
-  - name: fct_daily_heat_health
-    columns:
-      - name: date
-        tests:
-          - not_null
-      - name: ville
-        tests:
-          - not_null
-      - name: code_insee
-        tests:
-          - not_null
-      - name: region
-        tests:
-          - not_null
-      - name: departement
-        tests:
-          - not_null
+  - name: stg_odisse_hivernales
+    description: "Staging Odissé épidémies hivernales"

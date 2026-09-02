@@ -1,4 +1,5 @@
 -- models/mart/fct_daily_heat_weather.sql
+
 {{ config(
     materialized='table',
     schema='lesfourcasters_dbt',
