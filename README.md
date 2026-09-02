@@ -2,7 +2,7 @@
 
 Analyse de l'impact des vagues de chaleur sur la santé publique en France.
 
-Projet de fin de formation Wild Code School (Data Analyst, cohort mai–novembre 2026) combinant data engineering, analytics et health data science.
+Projet de fin de formation Wild Code School (Data Analyst, cohort mai–octobre 2026) combinant data engineering, analytics et health data science.
 
 ---
 
@@ -17,7 +17,7 @@ lesfourcasters collecte, transforme et analyse les données de vagues de chaleur
 - Fournir un dashboard exécutif pour les décideurs de santé publique
 
 ### Personas clés
-- Alisson : Chef des opérations SDIS (pompiers) – besoins opérationnels temps réel
+- Clement : Chef des opérations SDIS (pompiers) – besoins opérationnels temps réel
 - Data analysts, chercheurs en santé publique
 
 ---

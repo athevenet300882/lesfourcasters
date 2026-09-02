@@ -1,0 +1,38 @@
+{
+  "fetch_era5": {
+    "step": "fetch_era5",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 0.86,
+    "status": "success"
+  },
+  "fetch_odisse": {
+    "step": "fetch_odisse",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 0.39,
+    "status": "success"
+  },
+  "load_raw_data": {
+    "step": "load_raw_data",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 1.6,
+    "status": "success"
+  },
+  "dbt_run": {
+    "step": "dbt_run",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 2.07,
+    "status": "success"
+  },
+  "dbt_test": {
+    "step": "dbt_test",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 0.89,
+    "status": "success"
+  },
+  "generate_report": {
+    "step": "generate_report",
+    "emissions_kg_co2": 0.0,
+    "duration_seconds": 0.39,
+    "status": "success"
+  }
+}
