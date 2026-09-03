@@ -59,25 +59,16 @@ jobs:
           cat .env
 
       # ============================================
-      # 6. EXTRACT ERA5 DATA
+      # 6. EXTRACT DATA (ERA5 + ODISSÉ)
       # ============================================
-      - name: Extract ERA5 Seamless data
+      - name: Extract Data (ERA5 + Odissé)
         run: |
-          echo "🌍 Starting ERA5 extraction..."
-          python scripts/extract_era5.py
-          echo "✅ ERA5 extraction complete"
+          echo "🌍 Starting data extraction pipeline..."
+          python scripts/extract_data.py
+          echo "✅ Data extraction complete"
 
       # ============================================
-      # 7. EXTRACT ODISSÉ DATA
-      # ============================================
-      - name: Extract Odissé data
-        run: |
-          echo "🏥 Starting Odissé extraction..."
-          python scripts/extract_odisse.py
-          echo "✅ Odissé extraction complete"
-
-      # ============================================
-      # 8. RUN DBT MODELS
+      # 7. RUN DBT MODELS
       # ============================================
       - name: Run dbt models
         run: |
@@ -87,7 +78,7 @@ jobs:
           echo "✅ dbt pipeline complete"
 
       # ============================================
-      # 9. RUN DBT TESTS
+      # 8. RUN DBT TESTS
       # ============================================
       - name: Run dbt tests
         run: |
@@ -97,7 +88,7 @@ jobs:
           echo "✅ dbt tests complete"
 
       # ============================================
-      # 10. CLEANUP
+      # 9. CLEANUP
       # ============================================
       - name: Cleanup
         if: always()
@@ -106,7 +97,7 @@ jobs:
           echo "✅ Cleanup complete"
 
       # ============================================
-      # 11. JOB SUCCESS
+      # 10. JOB SUCCESS
       # ============================================
       - name: Pipeline success
         if: success()
@@ -120,7 +111,7 @@ jobs:
           echo "✅ dbt tests passed"
 
       # ============================================
-      # 12. JOB FAILURE
+      # 11. JOB FAILURE
       # ============================================
       - name: Pipeline failure
         if: failure()
