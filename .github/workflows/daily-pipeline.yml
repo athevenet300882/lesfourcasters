@@ -1,22 +1,52 @@
 name: Daily Pipeline - lesfourcasters
+
 on:
   schedule:
     - cron: '0 1 * * *'
+      timezone: 'Europe/Paris'
   workflow_dispatch:
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
+      # ============================================
+      # 1. CHECKOUT CODE
+      # ============================================
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # ============================================
+      # 2. SETUP PYTHON
+      # ============================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # ============================================
+      # 3. INSTALL DEPENDENCIES
+      # ============================================
       - name: Install dependencies
-        run: pip install google-cloud-bigquery requests dbt-bigquery python-dotenv
+        run: |
+          pip install --upgrade pip
+          pip install google-cloud-bigquery requests dbt-bigquery python-dotenv
+
+      # ============================================
+      # 4. SETUP GCP CREDENTIALS
+      # ============================================
       - name: Setup GCP credentials
-        run: echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
+          echo "GCP_KEY_PATH=/tmp/gcp-key.json" >> $GITHUB_ENV
+
+      # ============================================
+      # 5. CREATE .ENV FILE
+      # ============================================
       - name: Create .env file
         run: |
           cat > .env << EOF
@@ -24,9 +54,78 @@ jobs:
           GCP_KEY_PATH=/tmp/gcp-key.json
           OPEN_METEO_BASE_URL=https://archive-api.open-meteo.com/v1/archive
           MAX_RETRIES=4
-          BATCH_SIZE=20
+          BATCH_SIZE=10
           EOF
+          cat .env
+
+      # ============================================
+      # 6. EXTRACT ERA5 DATA
+      # ============================================
       - name: Extract ERA5 Seamless data
-        run: python scripts/extract_era5.py
+        run: |
+          echo "🌍 Starting ERA5 extraction..."
+          python scripts/extract_era5.py
+          echo "✅ ERA5 extraction complete"
+
+      # ============================================
+      # 7. EXTRACT ODISSÉ DATA
+      # ============================================
+      - name: Extract Odissé data
+        run: |
+          echo "🏥 Starting Odissé extraction..."
+          python scripts/extract_odisse.py
+          echo "✅ Odissé extraction complete"
+
+      # ============================================
+      # 8. RUN DBT MODELS
+      # ============================================
       - name: Run dbt models
-        run: dbt run --profiles-dir . --target ci
+        run: |
+          echo "📊 Starting dbt pipeline..."
+          cd lesfourcasters_dbt
+          dbt run --profiles-dir . --target ci
+          echo "✅ dbt pipeline complete"
+
+      # ============================================
+      # 9. RUN DBT TESTS
+      # ============================================
+      - name: Run dbt tests
+        run: |
+          echo "🧪 Running dbt tests..."
+          cd lesfourcasters_dbt
+          dbt test --profiles-dir . --target ci
+          echo "✅ dbt tests complete"
+
+      # ============================================
+      # 10. CLEANUP
+      # ============================================
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f /tmp/gcp-key.json .env
+          echo "✅ Cleanup complete"
+
+      # ============================================
+      # 11. JOB SUCCESS
+      # ============================================
+      - name: Pipeline success
+        if: success()
+        run: |
+          echo "================================"
+          echo "✅ DAILY PIPELINE SUCCESS!"
+          echo "================================"
+          echo "✅ ERA5 extracted"
+          echo "✅ Odissé extracted"
+          echo "✅ dbt models run"
+          echo "✅ dbt tests passed"
+
+      # ============================================
+      # 12. JOB FAILURE
+      # ============================================
+      - name: Pipeline failure
+        if: failure()
+        run: |
+          echo "================================"
+          echo "❌ DAILY PIPELINE FAILED!"
+          echo "================================"
+          exit 1
