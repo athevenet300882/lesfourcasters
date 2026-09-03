@@ -3,7 +3,6 @@ name: Daily Pipeline - lesfourcasters
 on:
   schedule:
     - cron: '0 1 * * *'
-      timezone: 'Europe/Paris'
   workflow_dispatch:
 
 jobs:
@@ -64,7 +63,7 @@ jobs:
       - name: Extract Data (ERA5 + Odissé)
         run: |
           echo "🌍 Starting data extraction pipeline..."
-          python scripts/extract_data.py
+          python lesfourcasters_dbt/scripts/extract_data.py
           echo "✅ Data extraction complete"
 
       # ============================================
