@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version - Batch 20 communes per API call
+Production version - Batch 10 communes per API call (optimized for timeout)
 """
 
 import requests
@@ -22,7 +22,7 @@ GCP_PROJECT = os.getenv("GCP_PROJECT")
 GCP_KEY_PATH = os.getenv("GCP_KEY_PATH")
 OPEN_METEO_URL = os.getenv("OPEN_METEO_BASE_URL", "https://archive-api.open-meteo.com/v1/archive")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", 4))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 20))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", 10))
 
 credentials = service_account.Credentials.from_service_account_file(GCP_KEY_PATH)
 client = bigquery.Client(credentials=credentials)
@@ -45,7 +45,7 @@ def compute_hash(row):
 # ============================================
 
 def fetch_batch(communes, start_date, end_date):
-    """Fetch 20 communes at once"""
+    """Fetch batch of communes at once (timeout 60s)"""
     for attempt in range(MAX_RETRIES):
         try:
             params = {
@@ -63,17 +63,9 @@ def fetch_batch(communes, start_date, end_date):
                 ]
             }
             
-            r = requests.get(OPEN_METEO_URL, params=params, timeout=30)
+            r = requests.get(OPEN_METEO_URL, params=params, timeout=60)
             r.raise_for_status()
-            data = r.json()
-            
-            # Debug: print response structure
-            if attempt == 0:
-                print(f"   Response type: {type(data)}")
-                if isinstance(data, dict):
-                    print(f"   Response keys: {list(data.keys())[:5]}")
-            
-            return data
+            return r.json()
         
         except requests.RequestException as e:
             if attempt < MAX_RETRIES - 1:
@@ -92,42 +84,29 @@ def build_rows(data, communes, start_date, end_date):
     rows = []
     
     # Handle response format
-    print(f"   Parsing response (type: {type(data).__name__})")
-    
     if isinstance(data, list):
-        print(f"   → Response is list with {len(data)} items")
         results = data
     elif isinstance(data, dict):
         if "results" in data:
-            print(f"   → Response has 'results' key with {len(data.get('results', []))} items")
             results = data["results"]
         elif "hourly" in data:
-            print(f"   → Response has 'hourly' key (single location)")
             results = [data]
         else:
-            print(f"   → Unexpected dict structure: {list(data.keys())[:5]}")
             return rows
     else:
-        print(f"   → Unexpected type: {type(data)}")
         return rows
     
     if not results:
-        print("   ⚠️  No results")
         return rows
-    
-    print(f"   Processing {len(results)} results for {len(communes)} communes")
     
     # Process each commune
     for comm_idx, commune in enumerate(communes):
         if comm_idx >= len(results):
-            print(f"   ⚠️  Missing result for {commune['code_insee']}")
             continue
         
         result = results[comm_idx]
         
-        # Handle if result is a list
         if isinstance(result, list):
-            print(f"   ⚠️  Result {comm_idx} is a list, skipping")
             continue
         
         hourly = result.get("hourly", {})
