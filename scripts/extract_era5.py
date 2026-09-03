@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version - Batch 10 communes per API call (optimized for timeout)
+Production version - Fixed schema for BigQuery types
 """
 
 import requests
@@ -195,11 +195,33 @@ def get_hashes():
 # ============================================
 
 def load_rows(rows):
-    """Load rows to BigQuery"""
+    """Load rows to BigQuery with explicit schema"""
     if not rows:
         print("⚠️  No rows to load")
         return
-    jc = bigquery.LoadJobConfig(autodetect=True, write_disposition="WRITE_APPEND")
+    
+    schema = [
+        bigquery.SchemaField("time", "TIMESTAMP"),
+        bigquery.SchemaField("nom_poi", "STRING"),
+        bigquery.SchemaField("temperature_2m_mean", "FLOAT64"),
+        bigquery.SchemaField("relative_humidity_2m_mean", "FLOAT64"),
+        bigquery.SchemaField("precipitation_sum", "FLOAT64"),
+        bigquery.SchemaField("wind_speed_10m_mean", "FLOAT64"),
+        bigquery.SchemaField("pressure_msl_mean", "FLOAT64"),
+        bigquery.SchemaField("sunshine_duration", "FLOAT64"),
+        bigquery.SchemaField("weather_code", "INTEGER"),
+        bigquery.SchemaField("ville", "STRING"),
+        bigquery.SchemaField("latitude_poi", "FLOAT64"),
+        bigquery.SchemaField("longitude_poi", "FLOAT64"),
+        bigquery.SchemaField("numero_departement", "INTEGER"),
+        bigquery.SchemaField("inserted_at", "TIMESTAMP"),
+        bigquery.SchemaField("hash", "STRING"),
+    ]
+    
+    jc = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition="WRITE_APPEND"
+    )
     client.load_table_from_json(rows, RAW_TABLE, job_config=jc).result()
     print(f"✅ Loaded {len(rows)} rows")
 
