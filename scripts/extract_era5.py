@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version v1.1 - Final stable version
+Production version v1.2 - Final stable version without hash field
 """
 
 import requests
@@ -176,18 +176,23 @@ def get_communes():
     return communes
 
 # ============================================
-# GET HASHES
+# GET EXISTING RECORDS
 # ============================================
 
-def get_hashes():
-    """Fetch existing hashes"""
+def get_existing_records():
+    """Fetch existing (date, nom_poi) pairs from raw table"""
     q = f"""
     SELECT DISTINCT 
-        MD5(CONCAT(CAST(DATE(time) as STRING), nom_poi)) as h
+        DATE(time) as date,
+        nom_poi
     FROM `{RAW_TABLE}`
     WHERE DATE(time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
     """
-    return {row["h"] for row in client.query(q)}
+    existing = set()
+    for row in client.query(q):
+        existing.add((str(row["date"]), row["nom_poi"]))
+    print(f"✅ Found {len(existing)} existing records")
+    return existing
 
 # ============================================
 # LOAD ROWS
@@ -217,8 +222,7 @@ def main():
     print("=" * 60)
     
     communes_list = list(get_communes().values())
-    hashes = get_hashes()
-    print(f"✅ Found {len(hashes)} existing hashes")
+    existing = get_existing_records()
     
     end = (datetime.utcnow() - timedelta(days=5)).date()
     start = end - timedelta(days=10)
@@ -240,11 +244,11 @@ def main():
             
             new = 0
             for r in batch_rows:
-                h = compute_hash(r)
-                if h not in hashes:
-                    r["hash"] = h
+                date_str = r["time"].split("T")[0]
+                key = (date_str, r["nom_poi"])
+                if key not in existing:
                     rows.append(r)
-                    hashes.add(h)
+                    existing.add(key)
                     new += 1
             
             print(f"   → {len(batch_rows)} total, {new} new")
