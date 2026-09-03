@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version v1.0 - All floats explicitly cast to FLOAT64
+Production version v1.1 - Final stable version
 """
 
 import requests
@@ -139,8 +139,7 @@ def build_rows(data, communes, start_date, end_date):
                         "ville": commune.get("ville"),
                         "latitude_poi": commune["latitude"],
                         "longitude_poi": commune["longitude"],
-                        "numero_departement": commune.get("numero_departement"),
-                        "inserted_at": datetime.utcnow().isoformat()
+                        "numero_departement": commune.get("numero_departement")
                     }
                     rows.append(row)
                     break
