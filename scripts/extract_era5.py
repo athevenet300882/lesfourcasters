@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version - Final
+Production version v1.0 - All floats explicitly cast to FLOAT64
 """
 
 import requests
@@ -129,12 +129,12 @@ def build_rows(data, communes, start_date, end_date):
                     row = {
                         "time": f"{curr}T00:00:00Z",
                         "nom_poi": commune["code_insee"],
-                        "temperature_2m_mean": temps[j] if j < len(temps) else None,
-                        "relative_humidity_2m_mean": humid[j] if j < len(humid) else None,
-                        "precipitation_sum": precip[j] if j < len(precip) else None,
-                        "wind_speed_10m_mean": wind[j] if j < len(wind) else None,
-                        "pressure_msl_mean": press[j] if j < len(press) else None,
-                        "sunshine_duration": sun[j] if j < len(sun) else None,
+                        "temperature_2m_mean": float(temps[j]) if j < len(temps) and temps[j] is not None else None,
+                        "relative_humidity_2m_mean": float(humid[j]) if j < len(humid) and humid[j] is not None else None,
+                        "precipitation_sum": float(precip[j]) if j < len(precip) and precip[j] is not None else None,
+                        "wind_speed_10m_mean": float(wind[j]) if j < len(wind) and wind[j] is not None else None,
+                        "pressure_msl_mean": float(press[j]) if j < len(press) and press[j] is not None else None,
+                        "sunshine_duration": float(sun[j]) if j < len(sun) and sun[j] is not None else None,
                         "weather_code": 0.0,
                         "ville": commune.get("ville"),
                         "latitude_poi": commune["latitude"],
