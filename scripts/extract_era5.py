@@ -1,6 +1,6 @@
 """
 Extract ERA5 data from Open-Meteo API and load into BigQuery.
-Production version - Fixed schema for BigQuery types
+Production version - All numeric values as FLOAT for BigQuery compatibility
 """
 
 import requests
@@ -135,11 +135,11 @@ def build_rows(data, communes, start_date, end_date):
                         "wind_speed_10m_mean": wind[j] if j < len(wind) else None,
                         "pressure_msl_mean": press[j] if j < len(press) else None,
                         "sunshine_duration": sun[j] if j < len(sun) else None,
-                        "weather_code": 0,
+                        "weather_code": 0.0,
                         "ville": commune.get("ville"),
                         "latitude_poi": commune["latitude"],
                         "longitude_poi": commune["longitude"],
-                        "numero_departement": commune.get("numero_departement"),
+                        "numero_departement": float(commune.get("numero_departement")) if commune.get("numero_departement") else None,
                         "inserted_at": datetime.utcnow().isoformat()
                     }
                     rows.append(row)
@@ -195,31 +195,13 @@ def get_hashes():
 # ============================================
 
 def load_rows(rows):
-    """Load rows to BigQuery with explicit schema"""
+    """Load rows to BigQuery with autodetect"""
     if not rows:
         print("⚠️  No rows to load")
         return
     
-    schema = [
-        bigquery.SchemaField("time", "TIMESTAMP"),
-        bigquery.SchemaField("nom_poi", "STRING"),
-        bigquery.SchemaField("temperature_2m_mean", "FLOAT64"),
-        bigquery.SchemaField("relative_humidity_2m_mean", "FLOAT64"),
-        bigquery.SchemaField("precipitation_sum", "FLOAT64"),
-        bigquery.SchemaField("wind_speed_10m_mean", "FLOAT64"),
-        bigquery.SchemaField("pressure_msl_mean", "FLOAT64"),
-        bigquery.SchemaField("sunshine_duration", "FLOAT64"),
-        bigquery.SchemaField("weather_code", "INTEGER"),
-        bigquery.SchemaField("ville", "STRING"),
-        bigquery.SchemaField("latitude_poi", "FLOAT64"),
-        bigquery.SchemaField("longitude_poi", "FLOAT64"),
-        bigquery.SchemaField("numero_departement", "INTEGER"),
-        bigquery.SchemaField("inserted_at", "TIMESTAMP"),
-        bigquery.SchemaField("hash", "STRING"),
-    ]
-    
     jc = bigquery.LoadJobConfig(
-        schema=schema,
+        autodetect=True,
         write_disposition="WRITE_APPEND"
     )
     client.load_table_from_json(rows, RAW_TABLE, job_config=jc).result()
