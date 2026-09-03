@@ -1,33 +1,32 @@
 name: Daily Pipeline - lesfourcasters
-
 on:
   schedule:
     - cron: '0 1 * * *'
   workflow_dispatch:
-
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
-        run: pip install google-cloud-bigquery pandas requests dbt-bigquery
-
+        run: pip install google-cloud-bigquery requests dbt-bigquery python-dotenv
       - name: Setup GCP credentials
         run: echo '${{ secrets.GCP_CREDENTIALS }}' > /tmp/gcp-key.json
-
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          GCP_PROJECT=newfourcasters
+          GCP_KEY_PATH=/tmp/gcp-key.json
+          OPEN_METEO_BASE_URL=https://archive-api.open-meteo.com/v1/archive
+          MAX_RETRIES=4
+          BATCH_SIZE=20
+          EOF
       - name: Extract ERA5 Seamless data
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: python scripts/extract_era5.py
-
       - name: Run dbt models
         run: dbt run --profiles-dir . --target ci
