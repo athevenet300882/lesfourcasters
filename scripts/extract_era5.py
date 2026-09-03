@@ -1,213 +1,286 @@
-import time
+"""
+Extract ERA5 data from Open-Meteo API and load into BigQuery.
+Production version - Batch 20 communes per API call
+"""
+
 import requests
-import pandas as pd
+import json
+import hashlib
+import time
 from datetime import datetime, timedelta
 from google.cloud import bigquery
-import hashlib
-import io
+from google.oauth2 import service_account
+from dotenv import load_dotenv
+import os
 
-GCP_PROJECT = 'newfourcasters'
-TABLE_ID = f"{GCP_PROJECT}.lesfourcasters_raw.raw_open_meteo"
+# ============================================
+# LOAD ENV VARIABLES
+# ============================================
+load_dotenv()
 
-LAG_DAYS = 5
-WINDOW_DAYS = 10
+GCP_PROJECT = os.getenv("GCP_PROJECT")
+GCP_KEY_PATH = os.getenv("GCP_KEY_PATH")
+OPEN_METEO_URL = os.getenv("OPEN_METEO_BASE_URL", "https://archive-api.open-meteo.com/v1/archive")
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", 4))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", 20))
 
-BATCH_SIZE = 20
-PAUSE_SECONDS = 15
-MAX_RETRIES = 4
+credentials = service_account.Credentials.from_service_account_file(GCP_KEY_PATH)
+client = bigquery.Client(credentials=credentials)
 
-DAILY_VARS = [
-    "weather_code",
-    "temperature_2m_mean",
-    "temperature_2m_min",
-    "temperature_2m_max",
-    "apparent_temperature_mean",
-    "apparent_temperature_min",
-    "apparent_temperature_max",
-    "relative_humidity_2m_mean",
-    "relative_humidity_2m_min",
-    "relative_humidity_2m_max",
-    "dew_point_2m_mean",
-    "precipitation_sum",
-    "rain_sum",
-    "snowfall_sum",
-    "precipitation_hours",
-    "wind_speed_10m_mean",
-    "wind_speed_10m_max",
-    "wind_gusts_10m_max",
-    "wind_direction_10m_dominant",
-    "cloud_cover_mean",
-    "pressure_msl_mean",
-    "sunshine_duration",
-    "shortwave_radiation_sum",
-    "et0_fao_evapotranspiration",
-    "vapour_pressure_deficit_max",
-    "soil_moisture_0_to_7cm_mean",
-    "soil_moisture_7_to_28cm_mean",
-    "soil_moisture_28_to_100cm_mean",
-    "soil_temperature_0_to_7cm_mean",
-]
+RAW_TABLE = f"{GCP_PROJECT}.lesfourcasters_raw.raw_open_meteo"
+COMMUNES_TABLE = f"{GCP_PROJECT}.lesfourcasters_raw.raw_communes_referentiel"
 
+# ============================================
+# COMPUTE HASH
+# ============================================
 
 def compute_hash(row):
-    """Hash SHA256 de la cle metier : une commune n'a qu'une mesure par jour."""
-    key = f"{row['time']}_{row['nom_poi']}"
-    return hashlib.sha256(key.encode()).hexdigest()
+    """Hash on date + commune (business key only)"""
+    date_str = row["time"].split("T")[0]
+    data = json.dumps({"date": date_str, "nom_poi": row["nom_poi"]}, sort_keys=True)
+    return hashlib.md5(data.encode()).hexdigest()
 
+# ============================================
+# FETCH BATCH
+# ============================================
 
-def get_communes_from_bigquery(client):
-    query = """
-    SELECT DISTINCT Commune, Latitude, Longitude, Numero_Departement
-    FROM `newfourcasters.lesfourcasters_raw.raw_communes_referentiel`
-    WHERE Commune IS NOT NULL
-      AND Latitude IS NOT NULL
-      AND Longitude IS NOT NULL
-    ORDER BY Commune
-    """
-    results = client.query(query).to_dataframe()
-    return [
-        {
-            'name': row['Commune'],
-            'lat': row['Latitude'],
-            'lon': row['Longitude'],
-            'dept': str(row['Numero_Departement']).zfill(2),
-        }
-        for _, row in results.iterrows()
-    ]
-
-
-def get_existing_hashes(client, start_date, end_date):
-    query = f"""
-    SELECT DISTINCT
-      FORMAT_TIMESTAMP('%Y-%m-%d 00:00:00', time) AS time_str,
-      nom_poi
-    FROM `{TABLE_ID}`
-    WHERE DATE(time) BETWEEN '{start_date}' AND '{end_date}'
-    """
-    results = client.query(query).to_dataframe()
-    return {
-        compute_hash({'time': row['time_str'], 'nom_poi': row['nom_poi']})
-        for _, row in results.iterrows()
-    }
-
-
-def fetch_batch(batch, start_date, end_date):
-    """Une seule requete pour tout un lot de communes."""
-    lats = ",".join(str(c['lat']) for c in batch)
-    lons = ",".join(str(c['lon']) for c in batch)
-    url = (
-        "https://archive-api.open-meteo.com/v1/era5"
-        f"?latitude={lats}&longitude={lons}"
-        f"&start_date={start_date}&end_date={end_date}"
-        f"&daily={','.join(DAILY_VARS)}"
-        "&timezone=Europe/Paris"
-    )
-
-    for attempt in range(1, MAX_RETRIES + 1):
+def fetch_batch(communes, start_date, end_date):
+    """Fetch 20 communes at once"""
+    for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.get(url, timeout=120)
-            resp.raise_for_status()
-            payload = resp.json()
-            return payload if isinstance(payload, list) else [payload]
-        except Exception as e:
-            message = str(e)[:120]
-            print(f"  tentative {attempt}/{MAX_RETRIES} echouee: {message}", flush=True)
-            if attempt < MAX_RETRIES:
-                time.sleep(30 * attempt)
-    return []
+            params = {
+                "latitude": ",".join(str(c["latitude"]) for c in communes),
+                "longitude": ",".join(str(c["longitude"]) for c in communes),
+                "start_date": start_date,
+                "end_date": end_date,
+                "hourly": [
+                    "temperature_2m",
+                    "relative_humidity_2m",
+                    "precipitation",
+                    "wind_speed_10m",
+                    "pressure_msl",
+                    "sunshine_duration"
+                ]
+            }
+            
+            r = requests.get(OPEN_METEO_URL, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            
+            # Debug: print response structure
+            if attempt == 0:
+                print(f"   Response type: {type(data)}")
+                if isinstance(data, dict):
+                    print(f"   Response keys: {list(data.keys())[:5]}")
+            
+            return data
+        
+        except requests.RequestException as e:
+            if attempt < MAX_RETRIES - 1:
+                wait_time = 2 ** attempt
+                print(f"⚠️  Attempt {attempt + 1} failed. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise
 
+# ============================================
+# BUILD ROWS
+# ============================================
 
-def collect(client, start_date, end_date):
-    """Retourne (lignes_nouvelles, nombre_de_lots_perdus)."""
-    communes = get_communes_from_bigquery(client)
-    print(f"{len(communes)} communes", flush=True)
-
-    existing = get_existing_hashes(client, start_date, end_date)
-    print(f"{len(existing)} lignes deja presentes sur la fenetre", flush=True)
-
-    now = datetime.now().isoformat()
-    new_rows = []
-    lots_perdus = 0
-    nb_lots = (len(communes) + BATCH_SIZE - 1) // BATCH_SIZE
-
-    for i in range(0, len(communes), BATCH_SIZE):
-        batch = communes[i:i + BATCH_SIZE]
-        print(f"Lot {i // BATCH_SIZE + 1}/{nb_lots} ({len(batch)} communes)", flush=True)
-
-        results = fetch_batch(batch, start_date, end_date)
-
-        if not results:
-            lots_perdus += 1
-            print(f"  LOT PERDU apres {MAX_RETRIES} tentatives", flush=True)
-            time.sleep(PAUSE_SECONDS)
+def build_rows(data, communes, start_date, end_date):
+    """Build rows from API response"""
+    rows = []
+    
+    # Handle response format
+    print(f"   Parsing response (type: {type(data).__name__})")
+    
+    if isinstance(data, list):
+        print(f"   → Response is list with {len(data)} items")
+        results = data
+    elif isinstance(data, dict):
+        if "results" in data:
+            print(f"   → Response has 'results' key with {len(data.get('results', []))} items")
+            results = data["results"]
+        elif "hourly" in data:
+            print(f"   → Response has 'hourly' key (single location)")
+            results = [data]
+        else:
+            print(f"   → Unexpected dict structure: {list(data.keys())[:5]}")
+            return rows
+    else:
+        print(f"   → Unexpected type: {type(data)}")
+        return rows
+    
+    if not results:
+        print("   ⚠️  No results")
+        return rows
+    
+    print(f"   Processing {len(results)} results for {len(communes)} communes")
+    
+    # Process each commune
+    for comm_idx, commune in enumerate(communes):
+        if comm_idx >= len(results):
+            print(f"   ⚠️  Missing result for {commune['code_insee']}")
             continue
+        
+        result = results[comm_idx]
+        
+        # Handle if result is a list
+        if isinstance(result, list):
+            print(f"   ⚠️  Result {comm_idx} is a list, skipping")
+            continue
+        
+        hourly = result.get("hourly", {})
+        
+        times = hourly.get("time", [])
+        temps = hourly.get("temperature_2m", [])
+        humid = hourly.get("relative_humidity_2m", [])
+        precip = hourly.get("precipitation", [])
+        wind = hourly.get("wind_speed_10m", [])
+        press = hourly.get("pressure_msl", [])
+        sun = hourly.get("sunshine_duration", [])
+        
+        # Build daily rows
+        curr = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        while curr <= end_dt:
+            for j, t in enumerate(times):
+                if t.startswith(str(curr)):
+                    row = {
+                        "time": f"{curr}T00:00:00Z",
+                        "nom_poi": commune["code_insee"],
+                        "temperature_2m_mean": temps[j] if j < len(temps) else None,
+                        "relative_humidity_2m_mean": humid[j] if j < len(humid) else None,
+                        "precipitation_sum": precip[j] if j < len(precip) else None,
+                        "wind_speed_10m_mean": wind[j] if j < len(wind) else None,
+                        "pressure_msl_mean": press[j] if j < len(press) else None,
+                        "sunshine_duration": sun[j] if j < len(sun) else None,
+                        "weather_code": 0,
+                        "ville": commune.get("ville"),
+                        "latitude_poi": commune["latitude"],
+                        "longitude_poi": commune["longitude"],
+                        "numero_departement": commune.get("numero_departement"),
+                        "inserted_at": datetime.utcnow().isoformat()
+                    }
+                    rows.append(row)
+                    break
+            curr += timedelta(days=1)
+    
+    return rows
 
-        for commune, data in zip(batch, results):
-            daily = data.get('daily')
-            if not daily:
-                continue
-            for j, date_str in enumerate(daily['time']):
-                temps = daily.get('temperature_2m_mean') or []
-                if j >= len(temps) or temps[j] is None:
-                    continue
+# ============================================
+# GET COMMUNES
+# ============================================
 
-                row = {
-                    'time': f"{date_str} 00:00:00",
-                    'nom_poi': commune['name'],
-                    'numero_departement': commune['dept'],
-                    'latitude_poi': commune['lat'],
-                    'longitude_poi': commune['lon'],
-                }
-                for var in DAILY_VARS:
-                    values = daily.get(var)
-                    row[var] = values[j] if values else None
+def get_communes():
+    """Fetch communes from BigQuery"""
+    q = f"""
+    SELECT 
+        `code INSEE` as code_insee,
+        Commune as ville,
+        Numero_Departement as numero_departement,
+        Latitude as latitude,
+        Longitude as longitude
+    FROM `{COMMUNES_TABLE}`
+    WHERE `code INSEE` IS NOT NULL
+    """
+    communes = {}
+    for row in client.query(q):
+        communes[row["code_insee"]] = {
+            "code_insee": row["code_insee"],
+            "ville": row["ville"],
+            "numero_departement": row["numero_departement"],
+            "latitude": row["latitude"],
+            "longitude": row["longitude"]
+        }
+    print(f"✅ Loaded {len(communes)} communes")
+    return communes
 
-                if compute_hash(row) in existing:
-                    continue
+# ============================================
+# GET HASHES
+# ============================================
 
-                row['row_hash'] = compute_hash(row)
-                row['insere_a'] = now
-                new_rows.append(row)
+def get_hashes():
+    """Fetch existing hashes"""
+    q = f"""
+    SELECT DISTINCT 
+        MD5(CONCAT(CAST(DATE(time) as STRING), nom_poi)) as h
+    FROM `{RAW_TABLE}`
+    WHERE DATE(time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+    """
+    return {row["h"] for row in client.query(q)}
 
-        time.sleep(PAUSE_SECONDS)
+# ============================================
+# LOAD ROWS
+# ============================================
 
-    return new_rows, lots_perdus
+def load_rows(rows):
+    """Load rows to BigQuery"""
+    if not rows:
+        print("⚠️  No rows to load")
+        return
+    jc = bigquery.LoadJobConfig(autodetect=True, write_disposition="WRITE_APPEND")
+    client.load_table_from_json(rows, RAW_TABLE, job_config=jc).result()
+    print(f"✅ Loaded {len(rows)} rows")
 
-
-def load_to_bigquery(client, rows):
-    df = pd.DataFrame(rows)
-    print(f"{len(df)} nouvelles lignes", flush=True)
-
-    job_config = bigquery.LoadJobConfig(
-        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-        write_disposition='WRITE_APPEND',
-    )
-    json_data = df.to_json(orient='records', date_format='iso', lines=True)
-    load_job = client.load_table_from_file(
-        io.StringIO(json_data), TABLE_ID, job_config=job_config
-    )
-    load_job.result()
-    print(f"{load_job.output_rows} lignes ajoutees a BigQuery", flush=True)
-
+# ============================================
+# MAIN
+# ============================================
 
 def main():
-    end_date = (datetime.now() - timedelta(days=LAG_DAYS)).date().isoformat()
-    start_date = (datetime.now() - timedelta(days=LAG_DAYS + WINDOW_DAYS)).date().isoformat()
-    print(f"Collecte ERA5 du {start_date} au {end_date}", flush=True)
-
-    client = bigquery.Client(project=GCP_PROJECT)
-    rows, lots_perdus = collect(client, start_date, end_date)
-
+    """Main pipeline"""
+    print("=" * 60)
+    print("🌍 ERA5 Pipeline")
+    print("=" * 60)
+    
+    communes_list = list(get_communes().values())
+    hashes = get_hashes()
+    print(f"✅ Found {len(hashes)} existing hashes")
+    
+    end = (datetime.utcnow() - timedelta(days=5)).date()
+    start = end - timedelta(days=10)
+    print(f"📅 Fetching {start} to {end}")
+    
+    rows = []
+    total = len(communes_list)
+    
+    for i in range(0, total, BATCH_SIZE):
+        batch = communes_list[i:i+BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        print(f"\n📦 Batch {batch_num}/{total_batches} ({len(batch)} communes)")
+        
+        try:
+            data = fetch_batch(batch, str(start), str(end))
+            batch_rows = build_rows(data, batch, str(start), str(end))
+            
+            new = 0
+            for r in batch_rows:
+                h = compute_hash(r)
+                if h not in hashes:
+                    r["hash"] = h
+                    rows.append(r)
+                    hashes.add(h)
+                    new += 1
+            
+            print(f"   → {len(batch_rows)} total, {new} new")
+        
+        except Exception as e:
+            print(f"❌ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(f"Pipeline stopped: {e}")
+    
     if rows:
-        load_to_bigquery(client, rows)
+        load_rows(rows)
     else:
-        print("Aucune nouvelle ligne a inserer", flush=True)
+        print("⚠️  No new rows")
+    
+    print("\n" + "=" * 60)
+    print("✅ Complete!")
+    print("=" * 60)
 
-    if lots_perdus:
-        raise SystemExit(
-            f"ECHEC : {lots_perdus} lot(s) non collecte(s) apres {MAX_RETRIES} tentatives"
-        )
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
