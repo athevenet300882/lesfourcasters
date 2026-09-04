@@ -2,7 +2,7 @@
 Combined Data Extraction Pipeline
 - ERA5 weather data (Open-Meteo API)
 - Odissé health data (Santé Publique France API)
-Production version v1.0
+Production version v1.1 - Fixed Odissé pagination (limit max 100)
 """
 
 import requests
@@ -16,9 +16,6 @@ from google.oauth2 import service_account
 from dotenv import load_dotenv
 import os
 
-# ============================================
-# LOAD ENV VARIABLES
-# ============================================
 load_dotenv()
 
 GCP_PROJECT = os.getenv("GCP_PROJECT")
@@ -38,12 +35,6 @@ RAW_DATASET = f"{GCP_PROJECT}.lesfourcasters_raw"
 # ============================================
 # HELPER FUNCTIONS
 # ============================================
-
-def compute_hash(row):
-    """Hash on date + commune (business key only)"""
-    date_str = row["time"].split("T")[0]
-    data = json.dumps({"date": date_str, "nom_poi": row["nom_poi"]}, sort_keys=True)
-    return hashlib.md5(data.encode()).hexdigest()
 
 def fetch_with_retry(url: str, params: dict, timeout: int = 60) -> dict:
     """Fetch URL with exponential backoff retries"""
@@ -80,7 +71,7 @@ def load_to_bigquery(table_name: str, rows: List[Dict]):
         print(f"   ❌ Error loading to {table_name}: {e}")
 
 def get_existing_records(table_name: str) -> set:
-    """Fetch existing (date, nom_poi) or (code_dept, annee) pairs"""
+    """Fetch existing (code_dept, annee) pairs"""
     try:
         q = f"""
         SELECT DISTINCT 
@@ -94,7 +85,7 @@ def get_existing_records(table_name: str) -> set:
         print(f"   ✅ Found {len(existing)} existing records in {table_name}")
         return existing
     except Exception as e:
-        print(f"   ℹ️  Table {table_name} may not exist yet: {e}")
+        print(f"   ℹ️  Table {table_name} may not exist yet")
         return set()
 
 # ============================================
@@ -123,7 +114,6 @@ def build_era5_rows(data, communes, start_date, end_date):
     """Build rows from ERA5 response"""
     rows = []
     
-    # Handle response format
     if isinstance(data, list):
         results = data
     elif isinstance(data, dict):
@@ -139,7 +129,6 @@ def build_era5_rows(data, communes, start_date, end_date):
     if not results:
         return rows
     
-    # Process each commune
     for comm_idx, commune in enumerate(communes):
         if comm_idx >= len(results):
             continue
@@ -159,7 +148,6 @@ def build_era5_rows(data, communes, start_date, end_date):
         press = hourly.get("pressure_msl", [])
         sun = hourly.get("sunshine_duration", [])
         
-        # Build daily rows
         curr = datetime.strptime(start_date, "%Y-%m-%d").date()
         end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
         
@@ -226,7 +214,7 @@ def get_existing_era5():
             existing.add((str(row["date"]), row["nom_poi"]))
         print(f"   ✅ Found {len(existing)} existing ERA5 records")
     except Exception as e:
-        print(f"   ℹ️  ERA5 table may not exist yet: {e}")
+        print(f"   ℹ️  ERA5 table may not exist yet")
     
     return existing
 
@@ -282,21 +270,44 @@ def extract_era5():
     return True
 
 # ============================================
-# ODISSÉ EXTRACTION
+# ODISSÉ EXTRACTION (avec pagination limit=100)
 # ============================================
 
-def fetch_odisse_dataset(dataset_id: str, limit: int = 10000) -> List[Dict]:
-    """Fetch dataset from Odissé API with retries"""
+def fetch_odisse_dataset_all(dataset_id: str) -> List[Dict]:
+    """Fetch ALL records from Odissé dataset using pagination (max 100/page)"""
     url = f"{ODISSE_API}/{dataset_id}/records"
-    params = {"limit": limit}
-    data = fetch_with_retry(url, params, timeout=30)
+    all_records = []
+    offset = 0
+    page_size = 100  # HARD LIMIT imposed by Opendatasoft API
     
-    if not data:
-        return []
+    while True:
+        params = {"limit": page_size, "offset": offset}
+        data = fetch_with_retry(url, params, timeout=30)
+        
+        if not data:
+            break
+        
+        results = data.get("results", [])
+        
+        if not results:
+            break
+        
+        all_records.extend(results)
+        print(f"      📄 Page offset={offset}: +{len(results)} records (total: {len(all_records)})")
+        
+        if len(results) < page_size:
+            # Last page reached
+            break
+        
+        offset += page_size
+        
+        # Safety: Opendatasoft caps offset+limit at 10000
+        if offset >= 10000:
+            print(f"      ⚠️  Reached API offset cap (10000)")
+            break
     
-    records = [r.get("record", {}).get("fields", {}) for r in data.get("results", [])]
-    print(f"      ✅ Retrieved {len(records)} records")
-    return records
+    print(f"      ✅ Retrieved {len(all_records)} total records")
+    return all_records
 
 def extract_odisse_canicule_jours():
     """Extract heat wave days by department"""
@@ -306,7 +317,7 @@ def extract_odisse_canicule_jours():
     table_name = "raw_odisse_canicule_jours"
     
     existing = get_existing_records(table_name)
-    records = fetch_odisse_dataset(dataset_id)
+    records = fetch_odisse_dataset_all(dataset_id)
     
     if not records:
         print("      No records retrieved")
@@ -337,7 +348,7 @@ def extract_odisse_deces_chaleur():
     table_name = "raw_odisse_deces_chaleur"
     
     existing = get_existing_records(table_name)
-    records = fetch_odisse_dataset(dataset_id)
+    records = fetch_odisse_dataset_all(dataset_id)
     
     if not records:
         print("      No records retrieved")
@@ -368,8 +379,21 @@ def extract_odisse_epidemies():
     dataset_id = "epidemies-hivernales-activite-des-urgences-au-cours-des-epidemies-hivernales-france-metropolitaine"
     table_name = "raw_odisse_epidemies_hivernales"
     
-    existing = get_existing_records(table_name)
-    records = fetch_odisse_dataset(dataset_id)
+    # Note: this table uses (region, saison) as key, not (code_departement, annee)
+    try:
+        q = f"""
+        SELECT DISTINCT region, saison
+        FROM `{RAW_DATASET}.{table_name}`
+        """
+        existing = set()
+        for row in client.query(q):
+            existing.add((row["region"], row["saison"]))
+        print(f"   ✅ Found {len(existing)} existing records in {table_name}")
+    except Exception:
+        print(f"   ℹ️  Table {table_name} may not exist yet")
+        existing = set()
+    
+    records = fetch_odisse_dataset_all(dataset_id)
     
     if not records:
         print("      No records retrieved")
