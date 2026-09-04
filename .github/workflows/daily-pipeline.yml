@@ -63,7 +63,7 @@ jobs:
       - name: Extract Data (ERA5 + Odissé)
         run: |
           echo "🌍 Starting data extraction pipeline..."
-          python lesfourcasters_dbt/scripts/extract_data.py
+          python scripts/extract_data.py
           echo "✅ Data extraction complete"
 
       # ============================================
