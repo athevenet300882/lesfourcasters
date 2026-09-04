@@ -3,6 +3,7 @@ name: Daily Pipeline - lesfourcasters
 on:
   schedule:
     - cron: '0 1 * * *'
+      timezone: Europe/Paris
   workflow_dispatch:
 
 jobs:
