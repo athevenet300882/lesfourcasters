@@ -72,7 +72,6 @@ jobs:
       - name: Run dbt models
         run: |
           echo "📊 Starting dbt pipeline..."
-          cd lesfourcasters_dbt
           dbt run --profiles-dir . --target ci
           echo "✅ dbt pipeline complete"
 
@@ -82,7 +81,6 @@ jobs:
       - name: Run dbt tests
         run: |
           echo "🧪 Running dbt tests..."
-          cd lesfourcasters_dbt
           dbt test --profiles-dir . --target ci
           echo "✅ dbt tests complete"
 
