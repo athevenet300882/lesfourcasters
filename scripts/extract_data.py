@@ -374,18 +374,20 @@ def extract_odisse_deces_chaleur():
 
 def extract_odisse_syndrome(dataset_id: str, table_name: str, pathologie: str):
     """Extract weekly urgences/SOS Médecins data for a given winter pathology
-    (grippe, bronchiolite, gastro-entérite). These datasets are keyed by
-    (semaine, zone/region) rather than (code_departement, annee)."""
+    (grippe, bronchiolite, gastro-entérite). Loads ALL raw fields returned by
+    the API (field names vary per dataset and aren't guessed), letting
+    BigQuery autodetect the schema. Dedup is done via a hash of the full
+    record content."""
     print(f"\n   📊 {pathologie}: Passages urgences + SOS Médecins")
     
     try:
         q = f"""
-        SELECT DISTINCT semaine, zone
+        SELECT DISTINCT record_hash
         FROM `{RAW_DATASET}.{table_name}`
         """
         existing = set()
         for row in client.query(q):
-            existing.add((row["semaine"], row["zone"]))
+            existing.add(row["record_hash"])
         print(f"   ✅ Found {len(existing)} existing records in {table_name}")
     except Exception:
         print(f"   ℹ️  Table {table_name} may not exist yet")
@@ -399,24 +401,18 @@ def extract_odisse_syndrome(dataset_id: str, table_name: str, pathologie: str):
     
     new_rows = []
     for r in records:
-        semaine = r.get("semaine") or r.get("semaine_glissante") or r.get("date_de_debut")
-        zone = r.get("zone") or r.get("region") or r.get("libelle_zone") or "FRANCE"
-        key = (semaine, zone)
+        record_hash = hashlib.md5(json.dumps(r, sort_keys=True, default=str).encode()).hexdigest()
         
-        if key not in existing:
-            row = {
-                "pathologie": pathologie,
-                "semaine": semaine,
-                "zone": zone,
-                "nb_passages_urgences": r.get("nb_passages_urgences") or r.get("passages_urgences") or r.get("nombre_passages_urgences"),
-                "taux_passages_urgences": r.get("taux_passages_urgences") or r.get("part_urgences") or r.get("taux_urgences"),
-                "nb_actes_sos_medecins": r.get("nb_actes_sos_medecins") or r.get("actes_sos_medecins") or r.get("nombre_actes_sos_medecins"),
-                "taux_actes_sos_medecins": r.get("taux_actes_sos_medecins") or r.get("part_sos_medecins") or r.get("taux_sos_medecins")
-            }
+        if record_hash not in existing:
+            row = dict(r)  # copy all raw fields as returned by the API
+            row["pathologie"] = pathologie
+            row["record_hash"] = record_hash
             new_rows.append(row)
-            existing.add(key)
+            existing.add(record_hash)
     
     print(f"      → {len(records)} total, {len(new_rows)} new")
+    if new_rows:
+        print(f"      🔑 Champs disponibles: {sorted(new_rows[0].keys())}")
     load_to_bigquery(table_name, new_rows)
 
 
