@@ -372,22 +372,20 @@ def extract_odisse_deces_chaleur():
     print(f"      → {len(records)} total, {len(new_rows)} new")
     load_to_bigquery(table_name, new_rows)
 
-def extract_odisse_epidemies():
-    """Extract winter epidemics data"""
-    print("\n   📊 Dataset 3: Épidémies hivernales")
+def extract_odisse_syndrome(dataset_id: str, table_name: str, pathologie: str):
+    """Extract weekly urgences/SOS Médecins data for a given winter pathology
+    (grippe, bronchiolite, gastro-entérite). These datasets are keyed by
+    (semaine, zone/region) rather than (code_departement, annee)."""
+    print(f"\n   📊 {pathologie}: Passages urgences + SOS Médecins")
     
-    dataset_id = "epidemies-hivernales-activite-des-urgences-au-cours-des-epidemies-hivernales-france-metropolitaine"
-    table_name = "raw_odisse_epidemies_hivernales"
-    
-    # Note: this table uses (region, saison) as key, not (code_departement, annee)
     try:
         q = f"""
-        SELECT DISTINCT region, saison
+        SELECT DISTINCT semaine, zone
         FROM `{RAW_DATASET}.{table_name}`
         """
         existing = set()
         for row in client.query(q):
-            existing.add((row["region"], row["saison"]))
+            existing.add((row["semaine"], row["zone"]))
         print(f"   ✅ Found {len(existing)} existing records in {table_name}")
     except Exception:
         print(f"   ℹ️  Table {table_name} may not exist yet")
@@ -401,24 +399,52 @@ def extract_odisse_epidemies():
     
     new_rows = []
     for r in records:
-        region = r.get("region", "UNKNOWN")
-        saison = r.get("saison", "UNKNOWN")
-        key = (region, saison)
+        semaine = r.get("semaine") or r.get("semaine_glissante") or r.get("date_de_debut")
+        zone = r.get("zone") or r.get("region") or r.get("libelle_zone") or "FRANCE"
+        key = (semaine, zone)
         
         if key not in existing:
             row = {
-                "region": region,
-                "saison": saison,
-                "annee": r.get("annee"),
-                "passage_urgences": r.get("passage_urgences"),
-                "passage_urgences_4ans": r.get("passage_urgences_4ans"),
-                "taux_passage_urgences": r.get("taux_passage_urgences")
+                "pathologie": pathologie,
+                "semaine": semaine,
+                "zone": zone,
+                "nb_passages_urgences": r.get("nb_passages_urgences") or r.get("passages_urgences") or r.get("nombre_passages_urgences"),
+                "taux_passages_urgences": r.get("taux_passages_urgences") or r.get("part_urgences") or r.get("taux_urgences"),
+                "nb_actes_sos_medecins": r.get("nb_actes_sos_medecins") or r.get("actes_sos_medecins") or r.get("nombre_actes_sos_medecins"),
+                "taux_actes_sos_medecins": r.get("taux_actes_sos_medecins") or r.get("part_sos_medecins") or r.get("taux_sos_medecins")
             }
             new_rows.append(row)
             existing.add(key)
     
     print(f"      → {len(records)} total, {len(new_rows)} new")
     load_to_bigquery(table_name, new_rows)
+
+
+def extract_odisse_grippe():
+    """Extract flu (grippe) surveillance data"""
+    extract_odisse_syndrome(
+        "grippe-passages-aux-urgences-et-actes-sos-medecins-france",
+        "raw_odisse_grippe",
+        "Grippe"
+    )
+
+
+def extract_odisse_bronchiolite():
+    """Extract bronchiolitis surveillance data"""
+    extract_odisse_syndrome(
+        "bronchiolite-passages-aux-urgences-et-actes-sos-medecins-france",
+        "raw_odisse_bronchiolite",
+        "Bronchiolite"
+    )
+
+
+def extract_odisse_gastro():
+    """Extract acute gastroenteritis surveillance data"""
+    extract_odisse_syndrome(
+        "gastro-enterite-aigue-passages-aux-urgences-et-actes-sos-medecins-france",
+        "raw_odisse_gastro_enterite",
+        "Gastro-entérite aiguë"
+    )
 
 def extract_odisse():
     """Main Odissé extraction pipeline"""
@@ -429,7 +455,9 @@ def extract_odisse():
     try:
         extract_odisse_canicule_jours()
         extract_odisse_deces_chaleur()
-        extract_odisse_epidemies()
+        extract_odisse_grippe()
+        extract_odisse_bronchiolite()
+        extract_odisse_gastro()
         return True
     except Exception as e:
         print(f"   ❌ ERROR: {e}")
