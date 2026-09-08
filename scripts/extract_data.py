@@ -1,8 +1,8 @@
 """
-Combined Data Extraction Pipeline
+Combined Data Extraction Pipeline (REFACTORED)
 - ERA5 weather data (Open-Meteo API)
 - Odissé health data (Santé Publique France API)
-Production version v1.1 - Fixed Odissé pagination (limit max 100)
+Production version v1.3 - Factorized for maintainability
 """
 
 import requests
@@ -10,7 +10,7 @@ import json
 import hashlib
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Callable, Optional, Tuple
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from dotenv import load_dotenv
@@ -33,7 +33,7 @@ COMMUNES_TABLE = f"{GCP_PROJECT}.lesfourcasters_raw.raw_communes_referentiel"
 RAW_DATASET = f"{GCP_PROJECT}.lesfourcasters_raw"
 
 # ============================================
-# HELPER FUNCTIONS
+# CORE HELPER FUNCTIONS
 # ============================================
 
 def fetch_with_retry(url: str, params: dict, timeout: int = 60) -> dict:
@@ -52,41 +52,43 @@ def fetch_with_retry(url: str, params: dict, timeout: int = 60) -> dict:
                 print(f"   ❌ ERROR: {e}")
                 return {}
 
-def load_to_bigquery(table_name: str, rows: List[Dict]):
+def load_to_bigquery(table_name: str, rows: List[Dict]) -> bool:
     """Load rows to BigQuery with autodetect"""
     if not rows:
         print(f"   ⚠️  No rows to load")
-        return
+        return False
     
     table_id = f"{RAW_DATASET}.{table_name}"
-    
     try:
-        jc = bigquery.LoadJobConfig(
-            autodetect=True,
-            write_disposition="WRITE_APPEND"
-        )
+        jc = bigquery.LoadJobConfig(autodetect=True, write_disposition="WRITE_APPEND")
         client.load_table_from_json(rows, table_id, job_config=jc).result()
         print(f"   ✅ Loaded {len(rows)} rows to {table_name}")
+        return True
     except Exception as e:
         print(f"   ❌ Error loading to {table_name}: {e}")
+        return False
 
-def get_existing_records(table_name: str) -> set:
-    """Fetch existing (code_dept, annee) pairs"""
+def get_existing_records(table_name: str, key_fields: List[str] = None) -> set:
+    """Fetch existing records (generic for any key_fields)"""
+    if key_fields is None:
+        key_fields = ["code_departement", "annee"]
+    
+    fields_select = ", ".join(key_fields)
     try:
-        q = f"""
-        SELECT DISTINCT 
-            code_departement,
-            annee
-        FROM `{RAW_DATASET}.{table_name}`
-        """
+        q = f"SELECT DISTINCT {fields_select} FROM `{RAW_DATASET}.{table_name}`"
         existing = set()
         for row in client.query(q):
-            existing.add((row["code_departement"], row["annee"]))
+            key = tuple(row[field] for field in key_fields)
+            existing.add(key)
         print(f"   ✅ Found {len(existing)} existing records in {table_name}")
         return existing
-    except Exception as e:
+    except Exception:
         print(f"   ℹ️  Table {table_name} may not exist yet")
         return set()
+
+def print_section(title: str, emoji: str = "📊"):
+    """Print a formatted section header"""
+    print(f"\n   {emoji} {title}")
 
 # ============================================
 # ERA5 EXTRACTION
@@ -100,12 +102,8 @@ def fetch_batch_era5(communes, start_date, end_date):
         "start_date": start_date,
         "end_date": end_date,
         "hourly": [
-            "temperature_2m",
-            "relative_humidity_2m",
-            "precipitation",
-            "wind_speed_10m",
-            "pressure_msl",
-            "sunshine_duration"
+            "temperature_2m", "relative_humidity_2m", "precipitation",
+            "wind_speed_10m", "pressure_msl", "sunshine_duration"
         ]
     }
     return fetch_with_retry(OPEN_METEO_URL, params, timeout=60)
@@ -113,18 +111,7 @@ def fetch_batch_era5(communes, start_date, end_date):
 def build_era5_rows(data, communes, start_date, end_date):
     """Build rows from ERA5 response"""
     rows = []
-    
-    if isinstance(data, list):
-        results = data
-    elif isinstance(data, dict):
-        if "results" in data:
-            results = data["results"]
-        elif "hourly" in data:
-            results = [data]
-        else:
-            return rows
-    else:
-        return rows
+    results = data.get("results", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
     
     if not results:
         return rows
@@ -134,19 +121,11 @@ def build_era5_rows(data, communes, start_date, end_date):
             continue
         
         result = results[comm_idx]
-        
         if isinstance(result, list):
             continue
         
         hourly = result.get("hourly", {})
-        
         times = hourly.get("time", [])
-        temps = hourly.get("temperature_2m", [])
-        humid = hourly.get("relative_humidity_2m", [])
-        precip = hourly.get("precipitation", [])
-        wind = hourly.get("wind_speed_10m", [])
-        press = hourly.get("pressure_msl", [])
-        sun = hourly.get("sunshine_duration", [])
         
         curr = datetime.strptime(start_date, "%Y-%m-%d").date()
         end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -157,12 +136,12 @@ def build_era5_rows(data, communes, start_date, end_date):
                     row = {
                         "time": f"{curr}T00:00:00Z",
                         "nom_poi": commune["code_insee"],
-                        "temperature_2m_mean": float(temps[j]) if j < len(temps) and temps[j] is not None else None,
-                        "relative_humidity_2m_mean": float(humid[j]) if j < len(humid) and humid[j] is not None else None,
-                        "precipitation_sum": float(precip[j]) if j < len(precip) and precip[j] is not None else None,
-                        "wind_speed_10m_mean": float(wind[j]) if j < len(wind) and wind[j] is not None else None,
-                        "pressure_msl_mean": float(press[j]) if j < len(press) and press[j] is not None else None,
-                        "sunshine_duration": float(sun[j]) if j < len(sun) and sun[j] is not None else None,
+                        "temperature_2m_mean": float(hourly.get("temperature_2m", [])[j]) if j < len(hourly.get("temperature_2m", [])) else None,
+                        "relative_humidity_2m_mean": float(hourly.get("relative_humidity_2m", [])[j]) if j < len(hourly.get("relative_humidity_2m", [])) else None,
+                        "precipitation_sum": float(hourly.get("precipitation", [])[j]) if j < len(hourly.get("precipitation", [])) else None,
+                        "wind_speed_10m_mean": float(hourly.get("wind_speed_10m", [])[j]) if j < len(hourly.get("wind_speed_10m", [])) else None,
+                        "pressure_msl_mean": float(hourly.get("pressure_msl", [])[j]) if j < len(hourly.get("pressure_msl", [])) else None,
+                        "sunshine_duration": float(hourly.get("sunshine_duration", [])[j]) if j < len(hourly.get("sunshine_duration", [])) else None,
                         "weather_code": 0.0,
                         "ville": commune.get("ville"),
                         "latitude_poi": commune["latitude"],
@@ -178,12 +157,7 @@ def build_era5_rows(data, communes, start_date, end_date):
 def get_communes_era5():
     """Fetch communes from BigQuery"""
     q = f"""
-    SELECT 
-        `code INSEE` as code_insee,
-        Commune as ville,
-        Numero_Departement as numero_departement,
-        Latitude as latitude,
-        Longitude as longitude
+    SELECT `code INSEE` as code_insee, Commune as ville, Numero_Departement as numero_departement, Latitude as latitude, Longitude as longitude
     FROM `{COMMUNES_TABLE}`
     WHERE `code INSEE` IS NOT NULL
     """
@@ -200,20 +174,14 @@ def get_communes_era5():
     return communes
 
 def get_existing_era5():
-    """Fetch existing (date, nom_poi) pairs from raw table"""
-    q = f"""
-    SELECT DISTINCT 
-        DATE(time) as date,
-        nom_poi
-    FROM `{RAW_TABLE_ERA5}`
-    WHERE DATE(time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-    """
+    """Fetch existing ERA5 records"""
+    q = f"SELECT DISTINCT DATE(time) as date, nom_poi FROM `{RAW_TABLE_ERA5}` WHERE DATE(time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"
     existing = set()
     try:
         for row in client.query(q):
             existing.add((str(row["date"]), row["nom_poi"]))
         print(f"   ✅ Found {len(existing)} existing ERA5 records")
-    except Exception as e:
+    except Exception:
         print(f"   ℹ️  ERA5 table may not exist yet")
     
     return existing
@@ -224,24 +192,24 @@ def extract_era5():
     print("🌍 ERA5 WEATHER DATA")
     print("=" * 60)
     
-    communes_list = list(get_communes_era5().values())
-    existing = get_existing_era5()
-    
-    end = (datetime.utcnow() - timedelta(days=5)).date()
-    start = end - timedelta(days=10)
-    print(f"   📅 Fetching {start} to {end}")
-    
-    rows = []
-    total = len(communes_list)
-    
-    for i in range(0, total, BATCH_SIZE):
-        batch = communes_list[i:i+BATCH_SIZE]
-        batch_num = i // BATCH_SIZE + 1
-        total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+    try:
+        communes_list = list(get_communes_era5().values())
+        existing = get_existing_era5()
         
-        print(f"\n   📦 Batch {batch_num}/{total_batches} ({len(batch)} communes)")
+        end = (datetime.utcnow() - timedelta(days=5)).date()
+        start = end - timedelta(days=10)
+        print(f"   📅 Fetching {start} to {end}")
         
-        try:
+        rows = []
+        total = len(communes_list)
+        
+        for i in range(0, total, BATCH_SIZE):
+            batch = communes_list[i:i+BATCH_SIZE]
+            batch_num = i // BATCH_SIZE + 1
+            total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+            
+            print(f"\n   📦 Batch {batch_num}/{total_batches} ({len(batch)} communes)")
+            
             data = fetch_batch_era5(batch, str(start), str(end))
             batch_rows = build_era5_rows(data, batch, str(start), str(end))
             
@@ -256,21 +224,18 @@ def extract_era5():
             
             print(f"      → {len(batch_rows)} total, {new} new")
         
-        except Exception as e:
-            print(f"      ❌ ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-    
-    if rows:
-        load_to_bigquery("raw_open_meteo", rows)
-    else:
-        print("   ⚠️  No new ERA5 rows")
-    
-    return True
+        if rows:
+            load_to_bigquery("raw_open_meteo", rows)
+        else:
+            print("   ⚠️  No new ERA5 rows")
+        
+        return True
+    except Exception as e:
+        print(f"   ❌ ERROR: {e}")
+        return False
 
 # ============================================
-# ODISSÉ EXTRACTION (avec pagination limit=100)
+# ODISSÉ EXTRACTION (FACTORIZED)
 # ============================================
 
 def fetch_odisse_dataset_all(dataset_id: str) -> List[Dict]:
@@ -278,7 +243,7 @@ def fetch_odisse_dataset_all(dataset_id: str) -> List[Dict]:
     url = f"{ODISSE_API}/{dataset_id}/records"
     all_records = []
     offset = 0
-    page_size = 100  # HARD LIMIT imposed by Opendatasoft API
+    page_size = 100
     
     while True:
         params = {"limit": page_size, "offset": offset}
@@ -288,177 +253,142 @@ def fetch_odisse_dataset_all(dataset_id: str) -> List[Dict]:
             break
         
         results = data.get("results", [])
-        
         if not results:
             break
         
         all_records.extend(results)
         print(f"      📄 Page offset={offset}: +{len(results)} records (total: {len(all_records)})")
         
-        if len(results) < page_size:
-            # Last page reached
+        if len(results) < page_size or offset >= 10000:
             break
         
         offset += page_size
-        
-        # Safety: Opendatasoft caps offset+limit at 10000
-        if offset >= 10000:
-            print(f"      ⚠️  Reached API offset cap (10000)")
-            break
     
     print(f"      ✅ Retrieved {len(all_records)} total records")
     return all_records
 
-def extract_odisse_canicule_jours():
-    """Extract heat wave days by department"""
-    print("\n   📊 Dataset 1: Jours de canicule par département")
+def extract_odisse_dataset(
+    dataset_id: str,
+    table_name: str,
+    dataset_name: str,
+    row_mapper: Optional[Callable[[Dict], Dict]] = None,
+    dedup_key: Optional[Tuple[str, str]] = None
+):
+    """
+    GENERIC function to extract any Odissé dataset
     
-    dataset_id = "canicules-nombres-de-jours-de-canicule-departement"
-    table_name = "raw_odisse_canicule_jours"
-    
-    existing = get_existing_records(table_name)
-    records = fetch_odisse_dataset_all(dataset_id)
-    
-    if not records:
-        print("      No records retrieved")
-        return
-    
-    new_rows = []
-    for r in records:
-        key = (r.get("code_departement"), r.get("annee"))
-        
-        if key not in existing:
-            row = {
-                "code_departement": r.get("code_departement"),
-                "departement_nom": r.get("nom_departement"),
-                "annee": r.get("annee"),
-                "nombre_jours": r.get("nombre_de_jours")
-            }
-            new_rows.append(row)
-            existing.add(key)
-    
-    print(f"      → {len(records)} total, {len(new_rows)} new")
-    load_to_bigquery(table_name, new_rows)
-
-def extract_odisse_deces_chaleur():
-    """Extract deaths attributable to heat"""
-    print("\n   📊 Dataset 2: Décès attribuables à la chaleur")
-    
-    dataset_id = "canicules-deces-attribuables-a-la-chaleur-pendant-lete-et-pendant-les-vagues-de-chaleur-france"
-    table_name = "raw_odisse_deces_chaleur"
-    
-    existing = get_existing_records(table_name)
-    records = fetch_odisse_dataset_all(dataset_id)
-    
-    if not records:
-        print("      No records retrieved")
-        return
-    
-    new_rows = []
-    for r in records:
-        key = (r.get("code_departement"), r.get("annee"))
-        
-        if key not in existing:
-            row = {
-                "code_departement": r.get("code_departement"),
-                "departement_nom": r.get("nom_departement"),
-                "annee": r.get("annee"),
-                "deces_attribuables": r.get("nombre_de_deces_attribuables"),
-                "fraction_deces": r.get("fraction_de_deces_attribuables")
-            }
-            new_rows.append(row)
-            existing.add(key)
-    
-    print(f"      → {len(records)} total, {len(new_rows)} new")
-    load_to_bigquery(table_name, new_rows)
-
-def extract_odisse_syndrome(dataset_id: str, table_name: str, pathologie: str):
-    """Extract weekly urgences/SOS Médecins data for a given winter pathology
-    (grippe, bronchiolite, gastro-entérite). Loads ALL raw fields returned by
-    the API (field names vary per dataset and aren't guessed), letting
-    BigQuery autodetect the schema. Dedup is done via a hash of the full
-    record content."""
-    print(f"\n   📊 {pathologie}: Passages urgences + SOS Médecins")
+    Args:
+        dataset_id: ID de l'API Odissé
+        table_name: Nom de la table BigQuery
+        dataset_name: Nom affiché (pour les logs)
+        row_mapper: Fonction optionnelle pour transformer chaque row
+        dedup_key: Tuple (field1, field2) pour dédupe, ou None pour hash-based
+    """
+    print_section(dataset_name)
     
     try:
-        q = f"""
-        SELECT DISTINCT record_hash
-        FROM `{RAW_DATASET}.{table_name}`
-        """
         existing = set()
-        for row in client.query(q):
-            existing.add(row["record_hash"])
-        print(f"   ✅ Found {len(existing)} existing records in {table_name}")
-    except Exception:
-        print(f"   ℹ️  Table {table_name} may not exist yet")
-        existing = set()
-    
-    records = fetch_odisse_dataset_all(dataset_id)
-    
-    if not records:
-        print("      No records retrieved")
-        return
-    
-    new_rows = []
-    for r in records:
-        record_hash = hashlib.md5(json.dumps(r, sort_keys=True, default=str).encode()).hexdigest()
+        if dedup_key:
+            existing = get_existing_records(table_name, list(dedup_key))
         
-        if record_hash not in existing:
-            row = dict(r)  # copy all raw fields as returned by the API
-            row["pathologie"] = pathologie
-            row["record_hash"] = record_hash
-            new_rows.append(row)
-            existing.add(record_hash)
+        records = fetch_odisse_dataset_all(dataset_id)
+        
+        if not records:
+            print("      No records retrieved")
+            return
+        
+        new_rows = []
+        for r in records:
+            # Appliquer le mapper si fourni
+            row = row_mapper(r) if row_mapper else dict(r)
+            
+            # Gérer la déduplication
+            if dedup_key:
+                key = (r.get(dedup_key[0]), r.get(dedup_key[1]))
+                if key not in existing:
+                    new_rows.append(row)
+                    existing.add(key)
+            else:
+                # Hash-based dedup (pour syndromes)
+                record_hash = hashlib.md5(json.dumps(r, sort_keys=True, default=str).encode()).hexdigest()
+                if record_hash not in existing:
+                    row["record_hash"] = record_hash
+                    new_rows.append(row)
+                    existing.add(record_hash)
+        
+        print(f"      → {len(records)} total, {len(new_rows)} new")
+        if new_rows and "record_hash" not in new_rows[0]:
+            print(f"      🔑 Champs: {sorted(new_rows[0].keys())}")
+        
+        load_to_bigquery(table_name, new_rows)
     
-    print(f"      → {len(records)} total, {len(new_rows)} new")
-    if new_rows:
-        print(f"      🔑 Champs disponibles: {sorted(new_rows[0].keys())}")
-    load_to_bigquery(table_name, new_rows)
+    except Exception as e:
+        print(f"      ❌ ERROR: {e}")
 
+# ===== ROW MAPPERS (transformation des données) =====
 
-def extract_odisse_grippe():
-    """Extract flu (grippe) surveillance data"""
-    extract_odisse_syndrome(
-        "grippe-passages-aux-urgences-et-actes-sos-medecins-france",
-        "raw_odisse_grippe",
-        "Grippe"
-    )
+def map_canicule_jours(r: Dict) -> Dict:
+    """Transform Canicule Jours raw data"""
+    return {
+        "code_departement": r.get("dep"),
+        "departement_nom": r.get("libgeo"),
+        "region_code": r.get("reg"),
+        "region_nom": r.get("reglib"),
+        "annee": r.get("annee"),
+        "nombre_jours": r.get("nb_j_can")
+    }
 
+def map_syndrome(pathologie_name: str):
+    """Factory pour créer un mapper de syndrome"""
+    def mapper(r: Dict) -> Dict:
+        row = dict(r)
+        row["pathologie"] = pathologie_name
+        return row
+    return mapper
 
-def extract_odisse_bronchiolite():
-    """Extract bronchiolitis surveillance data"""
-    extract_odisse_syndrome(
-        "bronchiolite-passages-aux-urgences-et-actes-sos-medecins-france",
-        "raw_odisse_bronchiolite",
-        "Bronchiolite"
-    )
-
-
-def extract_odisse_gastro():
-    """Extract acute gastroenteritis surveillance data"""
-    extract_odisse_syndrome(
-        "gastro-enterite-aigue-passages-aux-urgences-et-actes-sos-medecins-france",
-        "raw_odisse_gastro_enterite",
-        "Gastro-entérite aiguë"
-    )
+# ===== EXTRACTION FUNCTIONS =====
 
 def extract_odisse():
-    """Main Odissé extraction pipeline"""
+    """Main Odissé extraction pipeline - FACTORIZED"""
     print("\n" + "=" * 60)
     print("🏥 ODISSÉ HEALTH DATA")
     print("=" * 60)
     
     try:
-        extract_odisse_canicule_jours()
-        extract_odisse_deces_chaleur()
-        extract_odisse_grippe()
-        extract_odisse_bronchiolite()
-        extract_odisse_gastro()
+        # Canicule Jours
+        extract_odisse_dataset(
+            "canicules-nombres-de-jours-de-canicule-departement",
+            "raw_odisse_canicule_jours",
+            "Dataset 1: Jours de canicule par département",
+            row_mapper=map_canicule_jours,
+            dedup_key=("dep", "annee")
+        )
+        
+        # Décès Chaleur
+        extract_odisse_dataset(
+            "canicules-deces-attribuables-a-la-chaleur-pendant-lete-et-pendant-les-vagues-de-chaleur-france",
+            "raw_odisse_deces_chaleur",
+            "Dataset 2: Décès attribuables à la chaleur"
+        )
+        
+        # Syndromes (Grippe, Bronchiolite, Gastro)
+        syndromes = [
+            ("grippe-passages-aux-urgences-et-actes-sos-medecins-france", "raw_odisse_grippe", "Grippe"),
+            ("bronchiolite-passages-aux-urgences-et-actes-sos-medecins-france", "raw_odisse_bronchiolite", "Bronchiolite"),
+            ("gastro-enterite-aigue-passages-aux-urgences-et-actes-sos-medecins-france", "raw_odisse_gastro_enterite", "Gastro-entérite aiguë"),
+        ]
+        
+        for dataset_id, table_name, pathologie in syndromes:
+            extract_odisse_dataset(
+                dataset_id,
+                table_name,
+                f"Dataset: {pathologie}",
+                row_mapper=map_syndrome(pathologie)
+            )
+        
         return True
     except Exception as e:
         print(f"   ❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 # ============================================
@@ -468,7 +398,7 @@ def extract_odisse():
 def main():
     """Main pipeline"""
     print("\n" + "=" * 60)
-    print("📊 DATA EXTRACTION PIPELINE")
+    print("📊 DATA EXTRACTION PIPELINE (REFACTORED)")
     print("=" * 60)
     
     era5_ok = extract_era5()
