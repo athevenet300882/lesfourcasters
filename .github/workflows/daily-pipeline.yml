@@ -2,7 +2,7 @@ name: Daily Data Extraction & dbt Pipeline
 
 on:
   schedule:
-    # Exécute tous les jours à 1h du matin (Paris timezone = UTC+2 en été, UTC+1 en hiver)
+    # Exécute tous les jours à 1h du matin (Paris timezone)
     - cron: '0 1 * * *'
   workflow_dispatch:  # Permet de lancer manuellement
 
@@ -40,9 +40,37 @@ jobs:
           
       - name: Set up GCP credentials
         run: |
-          cat > /tmp/gcp-key.json << 'EOF'
-          ${{ secrets.GCP_CREDENTIALS }}
-          EOF
+          python3 << 'PYTHON_EOF'
+          import json
+          import base64
+          import os
+          
+          secret = '''${{ secrets.GCP_CREDENTIALS }}'''
+          
+          # Essayer de décoder si c'est du base64
+          try:
+              decoded = base64.b64decode(secret).decode('utf-8')
+              # Vérifier que c'est du JSON valide
+              json.loads(decoded)
+              secret = decoded
+              print("✅ Secret décodé depuis base64")
+          except:
+              print("ℹ️  Secret utilisé directement (pas du base64)")
+          
+          # Écrire le fichier JSON
+          with open('/tmp/gcp-key.json', 'w') as f:
+              f.write(secret)
+          
+          # Vérifier la validité
+          try:
+              data = json.loads(secret)
+              print(f"✅ Credentials valides")
+              print(f"   Service Account: {data.get('client_email', 'N/A')}")
+              print(f"   Project: {data.get('project_id', 'N/A')}")
+          except json.JSONDecodeError as e:
+              print(f"❌ Erreur JSON: {e}")
+              exit(1)
+          PYTHON_EOF
           chmod 600 /tmp/gcp-key.json
           
       - name: Run data extraction pipeline
@@ -57,14 +85,14 @@ jobs:
       - name: Create dbt profiles.yml
         run: |
           mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << EOF
+          cat > ~/.dbt/profiles.yml << 'EOF'
           lesfourcasters_dbt:
             target: ci
             outputs:
               ci:
                 type: bigquery
                 method: service-account
-                project: ${{ env.GCP_PROJECT }}
+                project: newfourcasters
                 keyfile: /tmp/gcp-key.json
                 dataset: lesfourcasters_dbt
                 location: US
@@ -95,11 +123,14 @@ jobs:
           echo "✓ Data extraction complete"
           echo "✓ dbt transformations complete"
           echo "✓ Data quality tests passed"
+          echo "================================"
           
       - name: Failure notification
         if: failure()
         run: |
           echo "================================"
           echo "❌ DAILY PIPELINE FAILED!"
+          echo "================================"
+          echo "Check the logs above for details"
           echo "================================"
           exit 1
