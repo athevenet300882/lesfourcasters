@@ -11,7 +11,8 @@ name: Daily Pipeline
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 6h UTC, quotidien
+    - cron: '0 1 * * *'  # 6h UTC, quotidien
+    timezone : 'europe/paris'
   workflow_dispatch:      # Déclenchement manuel
 ```
 
