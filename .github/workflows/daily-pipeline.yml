@@ -142,6 +142,8 @@ jobs:
           fi
           
       - name: Run dbt pipeline
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
           echo "🔄 Starting dbt pipeline..."
           cd ${{ github.workspace }}
@@ -150,6 +152,8 @@ jobs:
           
       - name: Generate dbt documentation
         if: always()
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
           dbt docs generate
           
