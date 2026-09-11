@@ -2,9 +2,9 @@ name: Daily Data Extraction & dbt Pipeline
 
 on:
   schedule:
-    # Exécute tous les jours à 1h du matin (Paris timezone)
+    # Tous les jours à 1h du matin (heure de Paris)
     - cron: '0 1 * * *'
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:
 
 env:
   GCP_PROJECT: newfourcasters
@@ -13,21 +13,51 @@ env:
 jobs:
   extract_and_transform:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-        
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install google-cloud-bigquery google-auth requests python-dotenv
-          
+          pip install dbt-bigquery==1.12.0
+
+      - name: Set up GCP credentials
+        run: |
+          python3 << 'PYTHON_EOF'
+          import json, base64
+
+          secret = '''${{ secrets.GCP_CREDENTIALS }}'''
+
+          try:
+              decoded = base64.b64decode(secret).decode('utf-8')
+              json.loads(decoded)
+              secret = decoded
+              print("Secret decode depuis base64")
+          except Exception:
+              print("Secret utilise directement")
+
+          with open('/tmp/gcp-key.json', 'w') as f:
+              f.write(secret)
+
+          try:
+              data = json.loads(secret)
+              print(f"Service Account: {data.get('client_email')}")
+              print(f"Project: {data.get('project_id')}")
+          except json.JSONDecodeError as e:
+              print(f"ERREUR JSON: {e}")
+              exit(1)
+          PYTHON_EOF
+
+          chmod 600 /tmp/gcp-key.json
+
       - name: Create .env file
         run: |
           cat > .env << EOF
@@ -36,70 +66,11 @@ jobs:
           OPEN_METEO_BASE_URL=https://archive-api.open-meteo.com/v1/archive
           MAX_RETRIES=4
           BATCH_SIZE=10
+          ERA5_LAG_DAYS=5
+          ERA5_WINDOW_DAYS=10
+          ERA5_DEDUP_LOOKBACK_DAYS=60
           EOF
-          
-      - name: Set up GCP credentials
-        run: |
-          python3 << 'PYTHON_EOF'
-          import json
-          import base64
-          import os
-          
-          secret = '''${{ secrets.GCP_CREDENTIALS }}'''
-          
-          print("📋 Secret length:", len(secret))
-          
-          # Essayer de décoder si c'est du base64
-          try:
-              decoded = base64.b64decode(secret).decode('utf-8')
-              # Vérifier que c'est du JSON valide
-              json.loads(decoded)
-              secret = decoded
-              print("✅ Secret décodé depuis base64")
-          except Exception as e:
-              print(f"ℹ️  Secret utilisé directement (pas du base64): {type(e).__name__}")
-          
-          # Écrire le fichier JSON
-          with open('/tmp/gcp-key.json', 'w') as f:
-              f.write(secret)
-          
-          # Vérifier la validité
-          try:
-              data = json.loads(secret)
-              print(f"✅ Credentials JSON valides")
-              print(f"   Type: {data.get('type', 'N/A')}")
-              print(f"   Service Account: {data.get('client_email', 'N/A')}")
-              print(f"   Project: {data.get('project_id', 'N/A')}")
-          except json.JSONDecodeError as e:
-              print(f"❌ Erreur JSON: {e}")
-              exit(1)
-          PYTHON_EOF
-          
-          chmod 600 /tmp/gcp-key.json
-          
-          # DEBUG: Vérifier que le fichier existe et est lisible
-          echo ""
-          echo "🔍 Vérification du fichier credentials:"
-          if [ -f /tmp/gcp-key.json ]; then
-            echo "✅ Fichier existe"
-            ls -lh /tmp/gcp-key.json
-            echo "Premiers caractères:"
-            head -c 150 /tmp/gcp-key.json
-            echo ""
-          else
-            echo "❌ Fichier n'existe pas!"
-            exit 1
-          fi
-          
-      - name: Run data extraction pipeline
-        run: |
-          echo "📊 Starting data extraction pipeline..."
-          python3 scripts/extract_data.py
-          
-      - name: Set up dbt
-        run: |
-          pip install dbt-bigquery==1.12.0
-          
+
       - name: Create dbt profiles.yml
         run: |
           mkdir -p ~/.dbt
@@ -119,61 +90,39 @@ jobs:
                 priority: interactive
                 retries: 1
           EOF
-          
-          echo "dbt profiles.yml created:"
-          cat ~/.dbt/profiles.yml
-          
-      - name: Verify GCP credentials for dbt
+
+      - name: Run data extraction pipeline
         run: |
-          echo "🔐 Vérification des credentials pour dbt:"
-          if [ -f /tmp/gcp-key.json ]; then
-            echo "✅ /tmp/gcp-key.json existe"
-            python3 << 'PYTHON_EOF'
-          import json
-          with open('/tmp/gcp-key.json', 'r') as f:
-              data = json.load(f)
-              print(f"✅ JSON valide: {data.get('type')}")
-              print(f"✅ Service Account: {data.get('client_email')}")
-              print(f"✅ Project ID: {data.get('project_id')}")
-          PYTHON_EOF
-          else
-            echo "❌ /tmp/gcp-key.json n'existe pas!"
-            exit 1
-          fi
-          
+          echo "=== Extraction des donnees ==="
+          python3 scripts/extract_data.py
+
       - name: Run dbt pipeline
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         run: |
-          echo "🔄 Starting dbt pipeline..."
+          echo "=== Transformations dbt ==="
           cd ${{ github.workspace }}
-          dbt run --full-refresh
+          dbt run
           dbt test
-          
+
       - name: Generate dbt documentation
-        if: always()
+        if: success()
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
-        run: |
-          dbt docs generate
-          
+        run: dbt docs generate
+
       - name: Success notification
         if: success()
         run: |
           echo "================================"
-          echo "✅ DAILY PIPELINE SUCCESS!"
+          echo "PIPELINE QUOTIDIEN OK"
           echo "================================"
-          echo "✓ Data extraction complete"
-          echo "✓ dbt transformations complete"
-          echo "✓ Data quality tests passed"
-          echo "================================"
-          
+
       - name: Failure notification
         if: failure()
         run: |
           echo "================================"
-          echo "❌ DAILY PIPELINE FAILED!"
-          echo "================================"
-          echo "Check the logs above for details"
+          echo "ECHEC DU PIPELINE QUOTIDIEN"
+          echo "Consulter les logs ci-dessus"
           echo "================================"
           exit 1
