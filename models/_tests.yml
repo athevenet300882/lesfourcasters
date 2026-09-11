@@ -1,102 +1,78 @@
 version: 2
 
 models:
-  # ===== DIMENSIONS =====
-  
-  - name: dim_commune
-    description: "Dimension communes - attributs géographiques"
+  - name: stg_communes
+    description: "Référentiel des communes nettoyé et dédoublonné"
     columns:
       - name: code_insee
-        description: "Code INSEE de la commune"
+        description: "Code INSEE sur 5 caractères (zéros à gauche, format corse 2A/2B conservé)"
+        tests:
+          - not_null
+          - unique
       - name: ville
-        description: "Nom de la ville"
-      - name: numero_departement
-        description: "Numéro de département"
+        tests:
+          - not_null
       - name: latitude
-        description: "Latitude"
+        tests:
+          - not_null
       - name: longitude
-        description: "Longitude"
+        tests:
+          - not_null
+
+  - name: stg_open_meteo
+    description: "Données ERA5 enrichies via dim_commune"
+    columns:
+      - name: code_insee
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: temperature_moyenne
+        tests:
+          - not_null
+      - name: ville
+        tests:
+          - not_null
+
+  - name: dim_commune
+    description: "Dimension commune"
+    columns:
+      - name: code_insee
+        tests:
+          - not_null
+          - unique
+      - name: ville
+        tests:
+          - not_null
 
   - name: dim_date
-    description: "Dimension date - calendrier"
+    description: "Dimension calendaire"
     columns:
       - name: date
-        description: "Date (clé primaire)"
         tests:
           - not_null
           - unique
       - name: annee
-        description: "Année"
         tests:
           - not_null
       - name: mois
-        description: "Mois (1-12)"
         tests:
           - not_null
-      - name: jour_semaine
-        description: "Jour de la semaine (1-7)"
-      - name: est_weekend
-        description: "Booléen: est-ce un weekend?"
 
-  # ===== FACT TABLES =====
-  
   - name: fct_daily_heat_weather
-    description: "Fact table quotidienne - météo (grain: jour-commune)"
+    description: "Table de faits météo journalière"
     columns:
-      - name: date
-        description: "Date"
-        tests:
-          - not_null
       - name: code_insee
-        description: "Code INSEE commune"
         tests:
           - not_null
-      - name: temperature_moyenne
-        description: "Température moyenne (°C)"
-      - name: humidite_moyenne
-        description: "Humidité relative moyenne (%)"
-      - name: precipitations_totales
-        description: "Précipitations totales (mm)"
-      - name: vitesse_vent_moyenne
-        description: "Vitesse vent moyenne (km/h)"
-      - name: pression_moyenne
-        description: "Pression moyenne (hPa)"
-      - name: ensoleillement_duree
-        description: "Durée d'ensoleillement (heures)"
-
-  # ===== STAGING =====
-  
-  - name: stg_open_meteo
-    description: "Staging Open-Meteo ERA5"
-    columns:
       - name: date
-        description: "Date"
-        tests:
-          - not_null
-      - name: code_insee
-        description: "Code INSEE"
-        tests:
-          - not_null
-      - name: temperature_moyenne
-        description: "Température moyenne"
-        tests:
-          - not_null
-
-  - name: stg_communes
-    description: "Staging communes"
-    columns:
-      - name: Commune
-        description: "Nom de la commune"
         tests:
           - not_null
 
   - name: stg_odisse_canicule
-    description: "Staging Odissé canicules"
+    description: "Données sanitaires Odissé - canicule"
     columns:
       - name: annee
-        description: "Année"
         tests:
           - not_null
-
-  - name: stg_odisse_hivernales
-    description: "Staging Odissé épidémies hivernales"

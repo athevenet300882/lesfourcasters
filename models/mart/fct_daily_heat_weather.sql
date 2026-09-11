@@ -13,30 +13,46 @@
 
 WITH weather_data AS (
     SELECT
-        CAST(time AS DATE) as date,
-        nom_poi as code_insee,
-        temperature_2m_mean as temperature_moyenne,
-        relative_humidity_2m_mean as humidite_moyenne,
-        precipitation_sum as precipitations_totales,
-        wind_speed_10m_mean as vitesse_vent_moyenne,
-        pressure_msl_mean as pression_moyenne,
-        sunshine_duration as ensoleillement_duree,
-        CURRENT_TIMESTAMP() as inserted_at,
-        CURRENT_TIMESTAMP() as updated_at
-    FROM {{ source('raw', 'raw_open_meteo') }}
-    WHERE time IS NOT NULL
-        AND nom_poi IS NOT NULL
+        date,
+        code_insee,
+        ville,
+        numero_departement,
+        latitude,
+        longitude,
+        code_meteo,
+        temperature_moyenne,
+        temperature_min,
+        temperature_max,
+        temperature_ressentie_max,
+        temperature_ressentie_moyenne,
+        humidite_moyenne,
+        precipitations_totales,
+        vitesse_vent_moyenne,
+        rafales_max,
+        pression_moyenne,
+        ensoleillement_duree
+    FROM {{ ref('stg_open_meteo') }}
 )
 
 SELECT
     date,
     code_insee,
-    ROUND(temperature_moyenne, 2) as temperature_moyenne,
-    ROUND(humidite_moyenne, 2) as humidite_moyenne,
-    ROUND(precipitations_totales, 2) as precipitations_totales,
-    ROUND(vitesse_vent_moyenne, 2) as vitesse_vent_moyenne,
-    ROUND(pression_moyenne, 2) as pression_moyenne,
-    ROUND(ensoleillement_duree, 2) as ensoleillement_duree,
-    inserted_at,
-    updated_at
+    ville,
+    numero_departement,
+    latitude,
+    longitude,
+    code_meteo,
+    ROUND(temperature_moyenne, 2) AS temperature_moyenne,
+    ROUND(temperature_min, 2) AS temperature_min,
+    ROUND(temperature_max, 2) AS temperature_max,
+    ROUND(temperature_ressentie_max, 2) AS temperature_ressentie_max,
+    ROUND(temperature_ressentie_moyenne, 2) AS temperature_ressentie_moyenne,
+    ROUND(humidite_moyenne, 2) AS humidite_moyenne,
+    ROUND(precipitations_totales, 2) AS precipitations_totales,
+    ROUND(vitesse_vent_moyenne, 2) AS vitesse_vent_moyenne,
+    ROUND(rafales_max, 2) AS rafales_max,
+    ROUND(pression_moyenne, 2) AS pression_moyenne,
+    ROUND(ensoleillement_duree, 2) AS ensoleillement_duree,
+    CURRENT_TIMESTAMP() AS inserted_at,
+    CURRENT_TIMESTAMP() AS updated_at
 FROM weather_data

@@ -7,15 +7,14 @@
 ) }}
 
 WITH communes AS (
-    SELECT DISTINCT
-        nom_poi as code_insee,
+    SELECT
+        code_insee,
         ville,
         numero_departement,
-        latitude_poi as latitude,
-        longitude_poi as longitude,
-        CURRENT_TIMESTAMP() as inserted_at
-    FROM {{ source('raw', 'raw_open_meteo') }}
-    WHERE nom_poi IS NOT NULL
+        latitude,
+        longitude,
+        inserted_at
+    FROM {{ ref('stg_communes') }}
 )
 
 SELECT
@@ -24,5 +23,6 @@ SELECT
     numero_departement,
     latitude,
     longitude,
-    inserted_at
+    inserted_at,
+    CURRENT_TIMESTAMP() as dbt_loaded_at
 FROM communes

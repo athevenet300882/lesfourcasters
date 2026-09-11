@@ -7,6 +7,7 @@ SELECT
   date,
   reg,
   nom_region,
+  REGEXP_REPLACE(NORMALIZE(UPPER(nom_region), NFD), r'\pM', '') AS region_key,
   sous_chapitre,
   theme,
   indicateur,

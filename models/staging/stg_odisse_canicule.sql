@@ -9,6 +9,7 @@ SELECT
   dep AS departement_code,
   reg,
   nom_region,
+  REGEXP_REPLACE(NORMALIZE(UPPER(nom_region), NFD), r'\pM', '') AS region_key,
   nb_j_can AS nb_jours_canicule,
   CURRENT_TIMESTAMP() AS loaded_at
 FROM {{ source('raw', 'raw_odisse_canicule') }}
